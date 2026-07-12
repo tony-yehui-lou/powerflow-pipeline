@@ -1,35 +1,29 @@
 # CLAUDE.md — powerflow-pipeline
 
-The projects will have 2 different types of pipleine
- - Data pipeline: Preprocssing and PostProcsssing
- - Training pipeline: Train or finetune models when needed
-
 ## Stack
-- **Python 3.12**, managed by **uv**. `uv sync` to install, `uv run <cmd>` to run. Never invoke `pip` or system Python.
-- **Core:** numpy · opencv-contrib-python (must be `-contrib`: `cv2.aruco` is not in plain opencv) · av (frame-accurate timestamps; OpenCV's are unreliable) · scipy · pandas · pydantic · typer · tqdm · torch.
-- **Dev:** pytest · pytest-cov · ruff · mypy.
-- No ML model libraries yet (no Lightning / timm / ultralytics). Ask before adding any dependency.
+- Python 3.12 managed by `uv`; use `uv sync` and `uv run`, never `pip` or system Python.
+- Core: numpy, opencv-contrib-python, av, scipy, pandas, pydantic, typer, tqdm, torch.
+- Dev: pytest, pytest-cov, ruff, mypy. Ask before adding dependencies.
 
-## Structure
+## Data pipeline structure
+All data pipelines live under `src/powerflow_pipeline/data/`:
 ```
-src/powerflow/
-  common/     config.py · sidecar.py            # pydantic; shared by both pipelines
-  data/       io/ · geometry/ · stages/ (s0…s6) · calib/ · preflight/ · validate/
-  training/   datasets.py · models/ · train.py  # stays empty until the data pipeline lands
-configs/      default.yaml                      # every threshold lives here, not in literals
-tests/        synthetic/ · unit/ · integration/
-data/         raw/ · interim/ · processed/      # gitignored
+data/
+  cli.py
+  core/                 # shared context, runner, discovery, filesystem, manifest, errors
+  <pipeline>/
+    pipeline.py         # ordered orchestration only
+    config.py           # pipeline-specific configuration
+    models.py           # optional pipeline-specific contracts
+    steps/              # one dedicated file per logical step
 ```
-`data/geometry/` is pure `array → array` with no I/O; `data/stages/` is thin (load → call geometry → gate → write sidecar).
-The sidecar is the contract between the two pipelines: without `px_per_mm` and `crop_bounds`, a model prediction cannot be converted back into metres.
+- Each pipeline owns its folder and step files; reusable orchestration and safe I/O belong in `core/`.
+- Support exactly one output mode per run: `--output <folder>` or `--in-place`; also provide `--dry-run`.
+- Work in staging, validate the complete result, then publish or commit in place; never leave partial scan changes.
+- Every run writes a manifest of steps, file operations, derived values, warnings, and rejected scans.
+- Keep pure geometry separate from I/O. Sidecars carry `px_per_mm`, `crop_bounds`, and provenance downstream.
 
-## TDD is mandatory
-Write a failing test → run it, confirm it fails for the right reason → write the minimum code to pass → refactor.
-Never write implementation before its test. Never claim work is done without pasting passing `pytest` output.
-**Coverage must stay >90%**, enforced by `--cov-fail-under=90` in `pyproject.toml`.
-Geometry is verified against synthetic fixtures with known ground truth (`tests/synthetic/`): a wrongly-tilted or
-mirrored image looks completely fine as an array — assert on numbers, never assume a transform is correct because it ran.
-
-## CI (GitHub Actions, on push + PR)
-`ruff check` → `ruff format --check` → `mypy src` → `pytest --cov --cov-fail-under=90`. All must pass to merge.
-No CD — this is a local batch pipeline with no deployment target.
+## Quality gates
+TDD is mandatory: failing test first, then minimum implementation. Coverage must remain above 90%.
+Verify geometry numerically with synthetic fixtures; never accept a transform merely because it ran.
+CI: `ruff check` → `ruff format --check` → `mypy src` → `pytest --cov --cov-fail-under=90`.
