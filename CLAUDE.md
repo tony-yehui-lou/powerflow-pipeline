@@ -6,7 +6,6 @@
 - Dev: pytest, pytest-cov, ruff, mypy. Ask before adding dependencies.
 
 ## Data pipeline structure
-Prefect 3 orchestrates all data pipelines under `src/powerflow_pipeline/data/`:
 ```
 data/
   cli.py                # typer entrypoint: builds config, invokes the flow

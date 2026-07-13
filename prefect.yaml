@@ -14,7 +14,7 @@ deployments:
       name: local
     parameters:
       config:
-        raw_root: data/raw
-        record_root: data/s0_ingest_output
+        raw_root: ../data/raw
+        record_root: ../data/s0_ingest_output
         output_root: data/s1_orient_output
         rotation: cw
