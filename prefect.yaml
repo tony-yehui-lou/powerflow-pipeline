@@ -1,0 +1,20 @@
+# Prefect deployments for the PowerFlow data pipelines.
+# Run `uv run prefect deploy` to apply.
+
+name: powerflow-pipeline
+prefect-version: ">=3.7"
+
+# One entry per pipeline, added when a pipeline lands under
+# src/powerflow_pipeline/data/<pipeline>/flow.py.
+deployments:
+  - name: preprocess
+    entrypoint: src/powerflow_pipeline/data/preprocess/flow.py:preprocess
+    description: S0 ingest and S1 orientation repair — every stream leaves portrait.
+    work_pool:
+      name: local
+    parameters:
+      config:
+        raw_root: data/raw
+        record_root: data/s0_ingest_output
+        output_root: data/s1_orient_output
+        rotation: cw

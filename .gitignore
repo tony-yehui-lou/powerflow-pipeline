@@ -1,6 +1,7 @@
 data/raw/
 data/interim/
 data/processed/
+data/*_output/
 
 .venv/
 __pycache__/

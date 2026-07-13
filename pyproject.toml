@@ -13,6 +13,8 @@ dependencies = [
     "typer>=0.12",
     "tqdm>=4.66",
     "torch>=2.5",
+    "prefect>=3.7.8",
+    "pyyaml>=6",
 ]
 
 [dependency-groups]
@@ -21,6 +23,7 @@ dev = [
     "pytest-cov>=6.0",
     "ruff>=0.8",
     "mypy>=1.13",
+    "types-pyyaml>=6.0.12.20260518",
 ]
 
 [project.scripts]
@@ -54,5 +57,5 @@ files = ["src", "tests"]
 
 # Third-party packages that ship no type stubs.
 [[tool.mypy.overrides]]
-module = ["cv2.*", "av.*", "scipy.*"]
+module = ["cv2.*", "av.*", "scipy.*", "pandas.*"]
 ignore_missing_imports = true
