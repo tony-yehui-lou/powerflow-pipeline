@@ -17,8 +17,14 @@ from typing import Any
 import yaml
 from prefect import task
 
+from powerflow_pipeline.data.common.task_logging import log_task_paths
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig
-from powerflow_pipeline.data.preprocess.models import AthleteMeta, CameraRecord, LiftMeta
+from powerflow_pipeline.data.preprocess.models import (
+    AthleteMeta,
+    CameraRecord,
+    CutInterval,
+    LiftMeta,
+)
 
 # The leaves of an uninstantiated template: type names and enum option lists.
 TYPE_NAMES = {
@@ -106,7 +112,10 @@ def _observed(record: CameraRecord) -> dict[str, Any]:
 
 @task
 def write_session_metadata(
-    template_path: Path, records: list[CameraRecord], config: PreprocessConfig
+    template_path: Path,
+    records: list[CameraRecord],
+    config: PreprocessConfig,
+    cut_interval: CutInterval | None = None,
 ) -> list[Path]:
     """Write one session's `metadata.yaml` into every stage output, inventing no values.
 
@@ -115,22 +124,31 @@ def write_session_metadata(
     """
 
     record = records[0]
+    destinations = [
+        root / record.date / record.session / "metadata.yaml" for root in config.stage_roots
+    ]
+    log_task_paths(template_path, destinations)
     template = load_meta_template(template_path)
     status = "absent" if template is None else "template" if is_template(template) else "filled"
+
+    lift = LiftMeta(dateTime_epoch=_epoch(record.creation_time)).model_dump()
+    if cut_interval is not None:
+        lift["cut_start_epoch_ms"] = cut_interval.cut_start_epoch_ms
+        lift["cut_end_epoch_ms"] = cut_interval.cut_end_epoch_ms
+        lift["side_creation_time"] = cut_interval.side_creation_time
+        lift["lift_start_time_side_in_ms"] = cut_interval.lift_start_time_side_in_ms
+        lift["lift_end_time_side_in_ms"] = cut_interval.lift_end_time_side_in_ms
 
     metadata: dict[str, Any] = {
         "meta_status": status,
         "date": record.date,
         "session": record.session,
-        "lift": LiftMeta(dateTime_epoch=_epoch(record.creation_time)).model_dump(),
+        "lift": lift,
         "athlete": AthleteMeta().model_dump(),
         "derived_from_session_name": derive_from_session_name(record.session),
         "cameras": [_observed(camera) for camera in records],
     }
 
-    destinations = [
-        root / record.date / record.session / "metadata.yaml" for root in config.stage_roots
-    ]
     if not config.dry_run:
         body = yaml.safe_dump(metadata, sort_keys=False, default_flow_style=False)
         for destination in destinations:

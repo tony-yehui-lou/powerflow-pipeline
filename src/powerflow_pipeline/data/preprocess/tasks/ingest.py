@@ -18,6 +18,7 @@ from prefect import task
 
 from powerflow_pipeline.data.common.errors import ScanRejected
 from powerflow_pipeline.data.common.filesystem import write_json
+from powerflow_pipeline.data.common.task_logging import log_task_paths
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig
 from powerflow_pipeline.data.preprocess.models import (
     CameraDir,
@@ -197,6 +198,7 @@ def ingest_camera(
     """Validate one camera and emit its `record.json`. Raises `ScanRejected` on any failure."""
 
     source = camera.source
+    log_task_paths(source, config.record_root / camera.relative / "record.json")
     _check_streams_exist(source)
 
     depth_paths = frame_paths(source / "depth")

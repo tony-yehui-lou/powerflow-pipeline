@@ -1,4 +1,4 @@
-"""Run configuration for the preprocess pipeline (S0 ingest + S1 orient)."""
+"""Run configuration for the preprocess pipeline (S0 ingest, S1 cut, S2 orient)."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ class PreprocessConfig(BaseModel):
 
     raw_root: Path
     record_root: Path
+    cut_root: Path
     output_root: Path
     rotation: RotationDirection = RotationDirection.CW
     frame_count_tolerance: int = Field(default=1, ge=0)
@@ -41,4 +42,4 @@ class PreprocessConfig(BaseModel):
         earlier stage's tree to find out. A new stage adds its root here and inherits the copy.
         """
 
-        return (self.record_root, self.output_root)
+        return (self.record_root, self.cut_root, self.output_root)

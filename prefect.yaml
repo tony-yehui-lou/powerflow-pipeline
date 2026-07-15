@@ -9,12 +9,15 @@ prefect-version: ">=3.7"
 deployments:
   - name: preprocess
     entrypoint: src/powerflow_pipeline/data/preprocess/flow.py:preprocess
-    description: S0 ingest and S1 orientation repair — every stream leaves portrait.
+    description: >-
+      S0 ingest, S1 cut to the lift window, and S2 orientation repair — every stream
+      leaves portrait.
     work_pool:
       name: local
     parameters:
       config:
         raw_root: ../data/raw
         record_root: ../data/s0_ingest_output
-        output_root: data/s1_orient_output
+        cut_root: ../data/s1_cut_output
+        output_root: ../data/s2_orient_output
         rotation: cw

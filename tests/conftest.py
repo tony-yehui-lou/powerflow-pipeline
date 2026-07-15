@@ -65,10 +65,14 @@ class MakeCamera(Protocol):
         camera_matrix: str | None = ...,
         omit: Sequence[str] = ...,
         skip_depth_index: int | None = ...,
+        creation_time: str = ...,
+        uptime_base: float = ...,
+        odometry_hz: float = ...,
+        imu_hz: float = ...,
     ) -> Path: ...
 
 
-def _write_rgb(path: Path, frames: int, size: tuple[int, int]) -> None:
+def _write_rgb(path: Path, frames: int, size: tuple[int, int], creation_time: str) -> None:
     """Encode a landscape clip with a bright block in the top-left quadrant.
 
     Variable frame rate, like the real capture: the device drops frames, so presentation
@@ -81,7 +85,7 @@ def _write_rgb(path: Path, frames: int, size: tuple[int, int]) -> None:
     image[: height // 3, : width // 3] = 255
 
     with av.open(str(path), "w") as container:
-        container.metadata["creation_time"] = CREATION_TIME
+        container.metadata["creation_time"] = creation_time
         stream = container.add_stream("libx264", rate=SOURCE_RATE)
         stream.width, stream.height = width, height
         stream.pix_fmt = "yuv420p"
@@ -122,6 +126,10 @@ def make_camera() -> MakeCamera:
         camera_matrix: str | None = None,
         omit: Sequence[str] = (),
         skip_depth_index: int | None = None,
+        creation_time: str = CREATION_TIME,
+        uptime_base: float = 370169.0,
+        odometry_hz: float = 60.0,
+        imu_hz: float = 125.0,
     ) -> Path:
         confidence_frames = depth_frames if confidence_frames is None else confidence_frames
         odometry_rows = depth_frames if odometry_rows is None else odometry_rows
@@ -131,7 +139,7 @@ def make_camera() -> MakeCamera:
         camera_dir.mkdir(parents=True)
 
         if "rgb" not in omit:
-            _write_rgb(camera_dir / "rgb.mp4", rgb_frames, RGB_SIZE)
+            _write_rgb(camera_dir / "rgb.mp4", rgb_frames, RGB_SIZE, creation_time)
 
         if "depth" not in omit:
             (camera_dir / "depth").mkdir()
@@ -165,15 +173,16 @@ def make_camera() -> MakeCamera:
             for i in range(odometry_rows):
                 fx = ODOMETRY_FX[i % len(ODOMETRY_FX)]
                 rows.append(
-                    f"{370169.0 + i / 60:.6f}, {i:06d}, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, "
-                    f"{fx}, {fx}, {ODOMETRY_CX}, {ODOMETRY_CY}, , "
+                    f"{uptime_base + i / odometry_hz:.6f}, {i:06d}, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,"
+                    f" 1.0, {fx}, {fx}, {ODOMETRY_CX}, {ODOMETRY_CY}, , "
                 )
             (camera_dir / "odometry.csv").write_text("\n".join(rows) + "\n")
 
         if "imu" not in omit:
             rows = ["timestamp, a_x, a_y, a_z, alpha_x, alpha_y, alpha_z"]
             rows += [
-                f"{370169.0 + i / 125:.6f}, 0.0, -0.98, 0.1, 0.0, 0.0, 0.0" for i in range(imu_rows)
+                f"{uptime_base + i / imu_hz:.6f}, 0.0, -0.98, 0.1, 0.0, 0.0, 0.0"
+                for i in range(imu_rows)
             ]
             (camera_dir / "imu.csv").write_text("\n".join(rows) + "\n")
 
@@ -210,6 +219,59 @@ def make_meta_template() -> Callable[..., Path]:
         date_dir.mkdir(parents=True, exist_ok=True)
         path = date_dir / "meta.yaml"
         path.write_text(body)
+        return path
+
+    return _make
+
+
+class MakeSessionMetadata(Protocol):
+    def __call__(
+        self,
+        raw_root: Path,
+        *,
+        date: str = ...,
+        session: str = ...,
+        lift_start_ms: Any = ...,
+        lift_end_ms: Any = ...,
+        omit: Sequence[str] = ...,
+        body: str | None = ...,
+    ) -> Path: ...
+
+
+@pytest.fixture
+def make_session_metadata() -> MakeSessionMetadata:
+    """Write the operator-authored, raw `metadata.yaml` a session ships with.
+
+    Defaults mirror `data/raw/9 July/cnj_45kg_Set1/metadata.yaml`. Pass a field as a
+    non-numeric value or a negative one, swap `lift_start_ms`/`lift_end_ms`, or list a
+    field in `omit` to drive one of the Cut stage's rejection cases; pass `body` to
+    replace the file verbatim (e.g. malformed YAML).
+    """
+
+    def _make(
+        raw_root: Path,
+        *,
+        date: str = "9 July",
+        session: str = "cnj_45kg_Set1",
+        lift_start_ms: Any = 100,
+        lift_end_ms: Any = 900,
+        omit: Sequence[str] = (),
+        body: str | None = None,
+    ) -> Path:
+        session_dir = raw_root / date / session
+        session_dir.mkdir(parents=True, exist_ok=True)
+        path = session_dir / "metadata.yaml"
+
+        if body is not None:
+            path.write_text(body)
+            return path
+
+        lines = ["lift:"]
+        if "lift_start_time_side_in_ms" not in omit:
+            lines.append(f"  lift_start_time_side_in_ms: {lift_start_ms}")
+        if "lift_end_time_side_in_ms" not in omit:
+            lines.append(f"  lift_end_time_side_in_ms: {lift_end_ms}")
+        path.write_text("\n".join(lines) + "\n")
         return path
 
     return _make

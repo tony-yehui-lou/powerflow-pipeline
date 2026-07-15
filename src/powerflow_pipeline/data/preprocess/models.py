@@ -86,6 +86,21 @@ class CameraRecord(BaseModel):
         return Path(self.date) / self.session / self.camera
 
 
+class CutInterval(BaseModel):
+    """The shared epoch-time window S1 Cut derives from the Side lift window.
+
+    Both cameras are trimmed to `[cut_start_epoch_ms, cut_end_epoch_ms]`; the other fields
+    are provenance, carried through to the output metadata unchanged.
+    """
+
+    cut_start_epoch_ms: int
+    cut_end_epoch_ms: int
+    side_creation_time: str
+    side_created_epoch_ms: int
+    lift_start_time_side_in_ms: int
+    lift_end_time_side_in_ms: int
+
+
 class LiftMeta(BaseModel):
     """The lift half of `metadata.yaml`. Absent values stay absent."""
 

@@ -13,6 +13,7 @@ from pathlib import Path
 from prefect import task
 
 from powerflow_pipeline.data.common.filesystem import INTERNAL_PREFIX
+from powerflow_pipeline.data.common.task_logging import log_task_paths
 from powerflow_pipeline.data.preprocess.models import CameraDir
 
 
@@ -31,6 +32,7 @@ def _child_dirs(parent: Path) -> Iterator[Path]:
 def discover_sessions(raw_root: Path) -> list[CameraDir]:
     """Return every `<date>/<session>/<camera>` directory under the raw root."""
 
+    log_task_paths(raw_root, None)
     return [
         CameraDir(
             date=date_dir.name,

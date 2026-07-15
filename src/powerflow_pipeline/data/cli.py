@@ -25,10 +25,13 @@ def main() -> None:
 def preprocess(
     input_root: Annotated[Path, typer.Option("--input", help="Raw capture root, e.g. data/raw.")],
     output_root: Annotated[
-        Path, typer.Option("--output", help="Where S1 publishes the portrait streams.")
+        Path, typer.Option("--output", help="Where S2 publishes the portrait streams.")
     ],
     record_root: Annotated[
         Path, typer.Option("--records", help="Where S0 writes record.json and metadata.yaml.")
+    ],
+    cut_root: Annotated[
+        Path, typer.Option("--cut", help="Where S1 publishes the time-aligned streams.")
     ],
     rotation: Annotated[
         RotationDirection,
@@ -41,7 +44,7 @@ def preprocess(
         bool, typer.Option("--overwrite", help="Replace cameras already published.")
     ] = False,
 ) -> None:
-    """Ingest a raw capture (S0) and rotate every stream to portrait (S1).
+    """Ingest a raw capture (S0), cut it to the lift window (S1), and rotate it (S2).
 
     There is no `--in-place` mode: it would rewrite the raw capture, and raw data is
     write-once. Each stage publishes to its own output root instead.
@@ -50,6 +53,7 @@ def preprocess(
     config = PreprocessConfig(
         raw_root=input_root,
         record_root=record_root,
+        cut_root=cut_root,
         output_root=output_root,
         rotation=rotation,
         dry_run=dry_run,

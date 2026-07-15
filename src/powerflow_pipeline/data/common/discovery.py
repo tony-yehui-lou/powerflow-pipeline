@@ -9,6 +9,7 @@ from prefect import task
 
 from powerflow_pipeline.data.common.filesystem import INTERNAL_PREFIX
 from powerflow_pipeline.data.common.models import RejectedScan, Scan
+from powerflow_pipeline.data.common.task_logging import log_task_paths
 
 
 @dataclass(slots=True)
@@ -23,6 +24,7 @@ class DiscoveryResult:
 def discover_scans(input_root: Path) -> DiscoveryResult:
     """Find immediate-child scan directories in stable order."""
 
+    log_task_paths(input_root, None)
     result = DiscoveryResult()
     for candidate in sorted(input_root.iterdir(), key=lambda path: path.name):
         if not candidate.is_dir() or candidate.name.startswith(INTERNAL_PREFIX):

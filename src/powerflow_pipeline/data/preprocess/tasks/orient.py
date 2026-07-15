@@ -27,6 +27,7 @@ from powerflow_pipeline.data.common.filesystem import (
     write_json,
 )
 from powerflow_pipeline.data.common.models import FileOp, StepResult
+from powerflow_pipeline.data.common.task_logging import log_task_paths
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig, RotationDirection
 from powerflow_pipeline.data.preprocess.geometry import (
     rotate_frame,
@@ -149,6 +150,7 @@ def orient_camera(record: CameraRecord, config: PreprocessConfig) -> StepResult:
 
     source = record.source
     destination = config.output_root / record.relative
+    log_task_paths(source, destination)
     rotation = config.rotation
 
     rgb_size = rotated_size(record.rgb_width, record.rgb_height)

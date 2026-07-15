@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from powerflow_pipeline.data.common.context import OutputMode
 from powerflow_pipeline.data.common.filesystem import write_json
 from powerflow_pipeline.data.common.models import RejectedScan, ScanOutcome
+from powerflow_pipeline.data.common.task_logging import log_task_paths
 
 
 def artifact_key(pipeline: str) -> str:
@@ -86,6 +87,7 @@ class RunManifest(BaseModel):
 def emit_manifest(manifest: RunManifest, path: Path | None = None) -> RunManifest:
     """Publish the manifest to the Prefect UI, and to disk when a path is given."""
 
+    log_task_paths(manifest.input_root, path)
     if path is not None:
         manifest.write(path)
     create_markdown_artifact(
