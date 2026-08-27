@@ -12,7 +12,9 @@ import cv2
 import numpy as np
 import pytest
 
+from powerflow_pipeline.data.common.models import StepResult
 from powerflow_pipeline.data.preprocess.config import RotationDirection
+from powerflow_pipeline.data.preprocess.models import CameraRecord
 from powerflow_pipeline.data.preprocess.tasks.discover import discover_sessions
 from powerflow_pipeline.data.preprocess.tasks.ingest import ingest_camera
 from powerflow_pipeline.data.preprocess.tasks.orient import orient_camera
@@ -40,12 +42,41 @@ def orient(tmp_path: Path, make_camera: MakeCamera, **overrides: object) -> Path
     return config.output_root / "9 July" / "cnj_45kg_Set1" / "Front"
 
 
+def orient_result(
+    tmp_path: Path, make_camera: MakeCamera, **overrides: object
+) -> tuple[CameraRecord, StepResult]:
+    """Like `orient()`, but returns the `(CameraRecord, StepResult)` tuple itself."""
+
+    raw = tmp_path / "raw"
+    make_camera(raw, rgb_frames=4, depth_frames=5)
+    config = make_config(tmp_path, **overrides)
+    (camera,) = discover_sessions.fn(raw)
+    record = ingest_camera.fn(camera, config)
+
+    return orient_camera.fn(record, config)
+
+
 def read_depth(path: Path) -> np.ndarray:
     """Read a stream frame exactly as stored: no depth scaling, no colour mapping."""
 
     frame: np.ndarray | None = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     assert frame is not None
     return frame
+
+
+def test_orient_camera_returns_record_with_rotated_dimensions(
+    tmp_path: Path, make_camera: MakeCamera
+) -> None:
+    """S3 Retilt needs S2's *output* geometry -- portrait dimensions, rotated `K`."""
+
+    orient_record, step = orient_result(tmp_path, make_camera)
+
+    assert (orient_record.rgb_width, orient_record.rgb_height) == (48, 64)  # rotated already
+    assert (orient_record.depth_width, orient_record.depth_height) == (12, 16)
+    assert orient_record.intrinsics.frame == "portrait"
+    assert orient_record.source == tmp_path / "s2" / "9 July" / "cnj_45kg_Set1" / "Front"
+    assert orient_record.n_frames == 4
+    assert step.derived["rotation"] == "cw"
 
 
 def test_every_stream_leaves_portrait(tmp_path: Path, make_camera: MakeCamera) -> None:
@@ -290,7 +321,7 @@ def test_overwrite_replaces_a_published_camera(tmp_path: Path, make_camera: Make
     record = ingest_camera.fn(camera, config)
     orient_camera.fn(record, config)
 
-    result = orient_camera.fn(record, make_config(tmp_path, overwrite=True))
+    _, result = orient_camera.fn(record, make_config(tmp_path, overwrite=True))
 
     published = config.output_root / "9 July" / "cnj_45kg_Set1" / "Front"
     assert result.derived["n_frames"] == 4
@@ -306,7 +337,7 @@ def test_the_step_result_reports_the_file_operations(
     (camera,) = discover_sessions.fn(raw)
     record = ingest_camera.fn(camera, config)
 
-    result = orient_camera.fn(record, config)
+    _, result = orient_camera.fn(record, config)
 
     assert result.derived["rotation"] == "cw"
     assert result.derived["k_rewritten"] is True

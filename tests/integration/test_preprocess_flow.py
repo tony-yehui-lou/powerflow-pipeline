@@ -28,10 +28,25 @@ def build_capture(
     raw = tmp_path / "raw"
     make_meta_template(raw)
 
-    # cnj_45kg_Set1: a healthy session with a Side lift window.
-    make_camera(raw, session="cnj_45kg_Set1", camera="Front", rgb_frames=5, depth_frames=6)
-    make_camera(raw, session="cnj_45kg_Set1", camera="Side", rgb_frames=5, depth_frames=6)
-    make_session_metadata(raw, session="cnj_45kg_Set1", lift_start_ms=16, lift_end_ms=80)
+    # cnj_45kg_Set1: a healthy session with a Side lift window and a real, fittable floor.
+    # A larger depth frame than the other fixtures' default: it must pool >= the default
+    # `retilt_min_floor_points` (500) from a single sampled frame for the CLI test below,
+    # which builds its config straight from CLI flags with no tunable overrides.
+    floor = {
+        "render_floor_plane": True,
+        "floor_tilt_deg": 8.0,
+        "floor_roll_deg": -2.0,
+        "depth_size": (64, 48),  # landscape (W > H), like the real capture -- see DEPTH_SIZE
+    }
+    make_camera(raw, session="cnj_45kg_Set1", camera="Front", rgb_frames=5, depth_frames=6, **floor)
+    make_camera(raw, session="cnj_45kg_Set1", camera="Side", rgb_frames=5, depth_frames=6, **floor)
+    make_session_metadata(
+        raw,
+        session="cnj_45kg_Set1",
+        lift_start_ms=16,
+        lift_end_ms=80,
+        floor_regions="full_frame",
+    )
 
     # cnj_55kg_Set1: one camera is missing its IMU, the other its depth.
     make_camera(raw, session="cnj_55kg_Set1", camera="Front", omit=["imu"])
@@ -42,10 +57,12 @@ def build_capture(
 
 
 def make_config(tmp_path: Path, raw: Path, **overrides: Any) -> PreprocessConfig:
+    overrides.setdefault("retilt_min_floor_points", 10)  # the fixture's frames are tiny
     return PreprocessConfig(
         raw_root=raw,
         record_root=tmp_path / "s0_ingest_output",
         cut_root=tmp_path / "s1_cut_output",
+        retilt_root=tmp_path / "s3_retilt_output",
         output_root=tmp_path / "s2_orient_output",
         **overrides,
     )
@@ -73,6 +90,8 @@ def test_the_run_cuts_and_rotates_valid_cameras(
     ]
     assert all("cut" in scan.steps for scan in manifest.scans)
     assert all("orient" in scan.steps for scan in manifest.scans)
+    assert all("retilt" in scan.steps for scan in manifest.scans)
+    assert (config.retilt_root / "9 July" / "cnj_45kg_Set1" / "Front" / "rgb.mp4").is_file()
     rejections = {rejected.scan_id: rejected.reason for rejected in manifest.rejected_scans}
     assert rejections["9 July/cnj_55kg_Set1/Front"] == "missing required stream: imu.csv"
     assert rejections["9 July/cnj_55kg_Set1/Side"] == "missing required stream: depth"
@@ -202,6 +221,7 @@ def test_the_cli_runs_the_flow(
     s0 = tmp_path / "s0"
     s1 = tmp_path / "s1"
     s2 = tmp_path / "s2"
+    s3 = tmp_path / "s3"
     result = CliRunner().invoke(
         app,
         [
@@ -212,6 +232,8 @@ def test_the_cli_runs_the_flow(
             str(s0),
             "--cut",
             str(s1),
+            "--retilt",
+            str(s3),
             "--output",
             str(s2),
             "--rotation",

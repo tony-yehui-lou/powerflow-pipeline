@@ -25,6 +25,7 @@ from powerflow_pipeline.data.preprocess.tasks.discover import discover_sessions
 from powerflow_pipeline.data.preprocess.tasks.ingest import ingest_camera
 from powerflow_pipeline.data.preprocess.tasks.metadata import write_session_metadata
 from powerflow_pipeline.data.preprocess.tasks.orient import orient_camera
+from powerflow_pipeline.data.preprocess.tasks.retilt import retilt_camera
 
 PIPELINE = "preprocess"
 
@@ -73,7 +74,10 @@ def preprocess(config: PreprocessConfig) -> RunManifest:
             record = ingested[(camera.date, camera.session, camera.camera)]
             try:
                 cut_record, cut_step = cut_camera(record, interval, config)
-                orient_step = orient_camera(cut_record, config)
+                orient_record, orient_step = orient_camera(cut_record, config)
+                # A camera rejected here has already published S2 output -- the same
+                # shape as a camera rejected at S2 having already published S1 output.
+                _, retilt_step = retilt_camera(orient_record, config.raw_root, config)
             except ScanRejected as rejection:
                 manifest.rejected_scans.append(
                     RejectedScan(
@@ -88,10 +92,10 @@ def preprocess(config: PreprocessConfig) -> RunManifest:
                     scan_id=camera.camera_id,
                     source=camera.source,
                     status="planned" if config.dry_run else "published",
-                    steps=["ingest", "cut", "orient"],
-                    derived={**cut_step.derived, **orient_step.derived},
-                    warnings=cut_step.warnings + orient_step.warnings,
-                    file_ops=cut_step.file_ops + orient_step.file_ops,
+                    steps=["ingest", "cut", "orient", "retilt"],
+                    derived={**cut_step.derived, **orient_step.derived, **retilt_step.derived},
+                    warnings=cut_step.warnings + orient_step.warnings + retilt_step.warnings,
+                    file_ops=cut_step.file_ops + orient_step.file_ops + retilt_step.file_ops,
                 )
             )
 

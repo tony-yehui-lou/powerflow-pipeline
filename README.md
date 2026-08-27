@@ -13,6 +13,10 @@ The pipeline that exists today is **`preprocess`** — Step 1 of Preprocessing V
 - **S2 · Orient** — rotate RGB, depth, and confidence to portrait, and rotate the camera matrix
   with them. This establishes invariant **I1**: every image is portrait, in the frame its
   intrinsics describe.
+- **S3 · Retilt** — fit one floor plane per camera from depth in an operator-annotated region,
+  derive the tilt/roll that levels it, and rectify RGB, depth, and confidence with the resulting
+  per-camera homography. This establishes invariant **I3**: the floor plane is level in every
+  image.
 
 A camera that fails validation is **rejected with a reason**, never emitted degraded.
 
@@ -97,6 +101,7 @@ uv run powerflow preprocess \
   --input   ../data/raw \
   --records ../data/s0_ingest_output \
   --cut     ../data/s1_cut_output \
+  --retilt  ../data/s3_retilt_output \
   --output  ../data/s2_orient_output
 ```
 
@@ -106,15 +111,16 @@ uv run powerflow preprocess \
 | `--records` | Where S0 writes `record.json`, `metadata.yaml`, and `manifest.json`. |
 | `--cut` | Where S1 publishes the trimmed, time-aligned landscape streams. |
 | `--output` | Where S2 publishes the rotated portrait streams. |
+| `--retilt` | Where S3 publishes the rectified, floor-levelled streams. |
 | `--rotation` | `cw` (default) or `ccw`. |
 | `--dry-run` | Validate and plan, write nothing. |
 | `--overwrite` | Replace cameras already published (default: refuse). |
 
 Start with `--dry-run`: it validates every camera and reports what *would* be written.
 
-A full run over the four cameras in `data/raw/9 July` takes about **10 minutes** — it decodes,
-cuts, rotates, and re-encodes ~22k frames twice — and produces about 2.5 GB across all three
-stage outputs.
+A full run over the four cameras in `data/raw/9 July` takes on the order of **10+ minutes** — it
+decodes, cuts, rotates, retilts, and re-encodes ~22k frames three times — and produces several GB
+across all four stage outputs.
 
 There is no `--in-place` mode. It would rewrite the raw capture, and raw data is write-once: each
 stage publishes to its own output root instead.
@@ -126,9 +132,10 @@ stage publishes to its own output root instead.
 | **Run manifest** (JSON) | `<--records>/manifest.json` | end of the flow |
 | **Run manifest** (markdown) | Prefect artifact, key `preprocess-run-manifest` | end of the flow |
 | Per-camera validated record | `<--records>/<date>/<session>/<camera>/record.json` | S0 |
-| Per-session metadata | `<date>/<session>/metadata.yaml` in **all three** stage roots | S0 |
+| Per-session metadata | `<date>/<session>/metadata.yaml` in **all four** stage roots | S0 |
 | Trimmed landscape streams + provenance | `<--cut>/<date>/<session>/<camera>/` incl. `cut_sidecar.json` | S1 |
 | Portrait streams + provenance | `<--output>/<date>/<session>/<camera>/` incl. `sidecar.json` | S2 |
+| Floor-levelled portrait streams + provenance | `<--retilt>/<date>/<session>/<camera>/` incl. `retilt_sidecar.json` | S3 |
 
 Every stage output root gets its own byte-identical copy of `metadata.yaml`, so a consumer of one
 stage never has to reach back into an earlier stage's tree to learn which lift the pixels came from.
@@ -165,6 +172,22 @@ jq '{camera: .camera_creation_time, rgb: .retained.rgb, depth: .retained.depth}'
 Depth and confidence are always selected as matched pairs — `cut_sidecar.json` records identical
 counts and epoch ranges for both.
 
+### Verifying a Retilt run
+
+Each camera's fitted plane, derived tilt/roll, and gravity cross-check land in
+`retilt_sidecar.json`:
+
+```bash
+jq '{tilt_deg, roll_deg, gravity_agreement_deg}' \
+  ../data/s3_retilt_output/11\ July/30kg_Set1/Front/retilt_sidecar.json
+```
+
+`gravity_agreement_deg` compares the fitted floor normal against gravity derived from odometry —
+it is recorded and **warns** past `retilt_gravity_tolerance_deg`, but never rejects a camera on
+its own. `plane_rms_residual_m` and `translation_span_m` are the other two numbers worth checking
+first: a run with a loose plane fit or a camera that moved during sampling is a run worth
+distrusting even if nothing was rejected.
+
 ---
 
 ## Layout
@@ -179,7 +202,8 @@ src/powerflow_pipeline/data/
     models.py             # CameraRecord, Intrinsics, CutInterval, ...
     geometry.py           # pure rotation maths: no I/O, no Prefect
     timeline.py           # pure epoch-time maths: no I/O, no Prefect
-    tasks/                # one @task per logical step: discover, ingest, cut, orient, metadata
+    retilt.py             # pure plane-fit/tilt/homography maths: no I/O, no Prefect
+    tasks/                # one @task per logical step: discover, ingest, cut, orient, retilt, metadata
 prefect.yaml              # deployments
 tests/unit/               # fast, no Prefect backend
 tests/integration/        # flow + CLI, under prefect_test_harness

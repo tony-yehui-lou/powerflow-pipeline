@@ -1,6 +1,6 @@
 # Floor-plane retilting
 
-Status: **draft** | Derived from: `4-retilt.md` (source note) | Updated: 2026-07-15
+Status: **draft** | Derived from: `4-retilt.md` (source note) | Updated: 2026-08-26
 
 ## Purpose
 
@@ -17,9 +17,12 @@ w.r.t. vertical)."* Scale (I4) and common framing (I5) are downstream concerns f
 stage only removes tilt and roll, never yaw, and never touches scale.
 
 **In:** portrait RGB + depth + confidence + `camera_matrix.csv` + `odometry.csv` — Orient's
-output, already time-aligned and pixel-aligned across streams. **Out:** the same streams,
-each pixel relocated (and, for depth, revalued) by the same rectifying rotation, plus
-`camera_matrix.csv` unchanged and a sidecar recording the fitted plane and applied rotation.
+output, already time-aligned and pixel-aligned across streams — plus the session's raw
+`metadata.yaml` (§1), the same file S1 Cut reads, for this camera's operator-annotated floor
+region.
+**Out:** the same streams, each pixel relocated (and, for depth, revalued) by the same
+rectifying rotation, plus `camera_matrix.csv` unchanged and a sidecar recording the fitted
+plane and applied rotation.
 
 If a camera's floor cannot be fit reliably, the camera is **rejected**, never passed through
 un-retilted or retilted from a bad fit — a silently mistilted clip corrupts every downstream
@@ -40,49 +43,97 @@ itself.
   **independent** estimate of "down" that does not depend on the depth-fitted floor, and is
   used only to validate the fit (§7), never to derive the rotation itself — depth is the
   geometric source of truth for where the floor actually is in this camera's frame.
+  Recovering "down" in *this stage's* camera frame from that quaternion requires composing
+  three changes of basis, none of which this document derives independently of real data:
+  world (ARKit, Y up) → ARKit camera-local axes (X right, Y up, Z **backward** — note this
+  is not the X-right/Y-down/Z-forward CV convention §2 uses for back-projection) → CV camera
+  axes → S2's rotated portrait frame (S2 rotates the *image*, per `orient.py`'s
+  `ODOMETRY_NOTE`, without touching the odometry columns themselves). A sign error in any
+  one step is not detectable from the spec text, only against real captures — so the
+  gravity-agreement check (§7) ships **warn-only** until calibrated against real sessions,
+  never as a rejection from day one.
+- **The floor region is operator-annotated, not inferred** (§1): a person has looked at this
+  specific camera's frame and drawn a rectangle around a clean patch of floor, once per
+  camera per session, recorded in the session's shared `metadata.yaml`. There is no
+  algorithmic fallback if it is absent.
 
-## 1. Confidence-based floor-point selection
+## 1. Floor-region selection
 
-The selection ROI is **view-dependent**: a front-facing shot has the barbell plates at the
-horizontal extremes, and a side-facing shot has the lifter's body dominating its left half.
-The camera's view is not inferred — it is the capture's own `Front`/`Side` directory name
-(`record.camera`), carried through S0–S2 unchanged.
+The selection region is **operator-annotated per camera**, not inferred. Both cameras of a
+session share one `metadata.yaml` — the same file S1 Cut reads for the lift window, at
+`<date>/<session>/metadata.yaml` — so the region fields are **prefixed by view** (`front_`
+or `side_`) to tell them apart, under a `video:` block:
 
-In bottom-left-origin normalized coordinates (`x` left→right, `y=0` at the bottom of the
-portrait frame, increasing upward), the ROI rectangle `(x0, y0)`–`(x1, y1)` is:
+```yaml
+video:
+  front_floor_region_bottom_left_in_pixels: (x0, y0)
+  front_floor_region_top_right_in_pixels: (x1, y1)
+  side_floor_region_bottom_left_in_pixels: (x0, y0)
+  side_floor_region_top_right_in_pixels: (x1, y1)
+```
 
-| View | Rectangle | Meaning |
-|---|---|---|
-| Front | `(1/6, 0)` – `(5/6, 1/4)` | middle two-thirds of the width, bottom quarter of the height |
-| Side | `(1/2, 0)` – `(1, 1/3)` | right half of the width, bottom third of the height |
+Retilt reads the pair matching **this camera's own** `Front`/`Side` role — a plain lookup
+key into the shared file, not a geometric rule: nothing about the rectangle itself is
+derived from the camera's name, only which of the four fields to read.
+
+Coordinates are normalized to `[0, 1]` in **standard image convention**: `x` left→right,
+`y` **top→bottom** (`y=0` is the top of the frame, `y=1` is the bottom). This is the
+*opposite* vertical convention from the ARKit/CV camera-frame axes used from §2 onward in
+this document (`Y` down there means a 3D direction, not a 2D screen position) — do not
+conflate the two. "`bottom_left`"/"`top_right`" name the rectangle's corners by their
+on-screen position, not a fixed geometric rule: a front-facing capture's region can span
+nearly the full width while a side-facing one covers less than half, entirely at the
+operator's discretion once they have looked at the frame. (This replaces an earlier draft of
+this section that derived the region algorithmically from the camera's `Front`/`Side` role;
+real annotated regions contradicted that rule's assumptions, so it has been dropped.)
+
+**On-disk representation.** Real captures write these four fields as **parenthesised
+strings**, e.g. `front_floor_region_bottom_left_in_pixels: (0, 1)` — `yaml.safe_load` returns
+the literal string `"(0, 1)"`, not a YAML sequence or a tuple. A reader must parse
+`"(x, y)"` explicitly (strip parens, split on `,`, `float()` each part); treating the value
+as already-numeric, or applying a numeric-type check before parsing, rejects every real
+region. This mirrors `2-cut.md`'s `read_lift_window`, which validates *after* it has a
+number in hand, not before.
+
+**The `_in_pixels` suffix is legacy and wrong**: every real value observed is a normalized
+`[0, 1]` fraction (e.g. `0.75093`, `0.40268`), consistent with the rest of this section, not
+a pixel coordinate. Treat the field names as fixed identifiers and the suffix as
+non-authoritative; a value outside `[0, 1]` after parsing is rejected as out-of-bounds (§7),
+not reinterpreted as pixels.
 
 Converted to pixel row/column ranges for a `width x height` portrait image (0-indexed rows,
 top→bottom):
 
 ```text
-Front: col in [round(width/6), round(width*5/6)), row in [height - round(height/4), height)
-Side:  col in [round(width/2), width),             row in [height - round(height/3), height)
+col_start = round(width * x0)      row_start = round(height * y1)
+col_end   = round(width * x1)      row_end   = round(height * y0)
 ```
 
-Within that view-specific ROI, restated from the source note with the threshold denominator
-the owner has fixed at **one-sixth**:
+Within that region, restated from the source note with the threshold denominator the owner
+has fixed at **one-sixth**:
 
 - Never use depth coordinates with confidence `0`.
-- Find the **largest 4-connected region** of confidence-`2` pixels within the ROI. If it
-  covers **at least one-sixth of the ROI's area**, use **only** confidence-`2` coordinates
-  from that ROI.
-- **Otherwise**, use coordinates with confidence `1` **and** `2` from the ROI (still
-  excluding `0`).
+- Find the **largest 4-connected region** of confidence-`2` pixels within the annotated
+  region. If it covers **at least one-sixth of the region's area**, use **only**
+  confidence-`2` coordinates from it.
+- **Otherwise**, use coordinates with confidence `1` **and** `2` from it (still excluding
+  `0`).
 
 This selection runs per sampled frame (§3); the pooled union across sampled frames is what
-the plane is fit to. A camera whose name is neither `Front` nor `Side` has no defined ROI
-and is **rejected** rather than guessed at (§7).
+the plane is fit to. A camera whose view-prefixed floor-region fields are missing from the
+session's `metadata.yaml`, or whose region is degenerate or out of bounds, is **rejected**
+rather than guessed at (§7).
 
 ## 2. Back-projection to 3D
 
 For each selected pixel `(u, v)` with stored depth `d_mm`, using the **depth-resolution**
 intrinsics `K_d` (the portrait `camera_matrix.csv` scaled by `depth_width / rgb_width` and
-`depth_height / rgb_height` — depth and RGB share a portrait frame but not a resolution):
+`depth_height / rgb_height` — depth and RGB share a portrait frame but not a resolution).
+Confirmed shapes: RGB `1440x1920`, depth `192x256`, giving scale `s = 0.13333` on both axes.
+Scaling is **pixel-centre**, not corner: `fx_d = fx * s`, `fy_d = fy * s`, but
+`cx_d = (cx + 0.5) * s - 0.5` and `cy_d = (cy + 0.5) * s - 0.5` — scaling the principal
+point by `s` alone (no half-pixel correction) biases every back-projected point by up to
+half a depth pixel, which is not negligible against the floor-plane RMS tolerance (§7).
 
 ```text
 Z = d_mm / 1000                    # metres
@@ -121,8 +172,16 @@ roll = atan2(n_x, -n_y)              # about Z (optical axis) — levels the hor
 n'   = R_z(-roll) * n                # de-roll the normal
 tilt = atan2(n'_z, -n'_y)            # about X — points the optical axis at the floor's normal
 
-R = R_x(tilt) @ R_z(roll)
+R = R_x(tilt) @ R_z(-roll)
 ```
+
+**Corrected** (implementation): the final composition is `R_z(-roll)`, not `R_z(roll)` as an
+earlier draft of this section had it. Verified numerically against random floor normals
+(`CLAUDE.md`: "verify geometry numerically ... never accept a transform merely because it
+ran") — with standard right-handed `R_x`/`R_z` rotation matrices and the de-roll step above,
+`R_z(roll)` in the final line does not level the fitted normal to `(0, -1, 0)`; `R_z(-roll)`
+does, exactly, to floating-point precision, for every normal the de-roll step actually
+de-rolls. `roll` and `tilt` themselves are unchanged — only this composition's sign.
 
 `R` is the rotation that, applied to the camera, makes `R @ n = (0, -1, 0)` — i.e. after
 retilting, the floor's normal is exactly "up" in the rectified camera frame. `roll` and
@@ -169,9 +228,12 @@ applied once per stream (`K` is that stream's own intrinsics — RGB-resolution 
 - **Border handling.** Rectification always exposes invalid border regions (no source pixel
   maps there) and, symmetrically, can push valid content outside the original frame bounds.
   This stage does **not** crop or pad — it records the **valid-content bounding box** (in
-  rectified pixel coordinates) in the sidecar. Cropping to a common region across cameras is
-  S5's job (`5-scaling.md` already scales to "the common output size"); duplicating that
-  logic here would let the two stages disagree about what "valid" means.
+  rectified pixel coordinates) in the sidecar. The consumer is **S4 Scaling, which trims to
+  this box as its first step, before any resampling** (`5-scaling.md` §"Step 0") — not S5,
+  and not because scaling produces "a common output size" (it does not; see the I4/I5 split in
+  `1-ingestion_orient.md`). Deferring the trim to a single downstream consumer, rather than
+  cropping here too, keeps one stage owning what "valid" means instead of letting S3 and S4
+  disagree about it.
 
 ## 6. Output contract
 
@@ -191,12 +253,15 @@ New stage directory, e.g. `../data/s3_retilt_output/`, mirroring the existing
   - `homography_rgb`, `homography_depth` — the applied `H` for each resolution;
   - `gravity_agreement_deg` — angle between the fitted normal and the odometry gravity
     vector (§7);
+  - `gravity_check_mode` — `"warn"` while the gravity check is unpromoted (§7), the run-time
+    counterpart of the same field's `"reject"` value once promoted;
   - `valid_bounds_px` — `[x0, y0, x1, y1]` of the rectified valid-content region;
   - `depth_values_recomputed: true`, `k_rewritten: false` — explicit, machine-checkable
     provenance flags in the same spirit as S1 Orient's `k_rewritten`.
 
-`metadata.yaml` gains no new required fields (unlike Cut) — retilting is derived entirely
-from this camera's own streams, nothing cross-camera or operator-declared.
+`metadata.yaml` gains no new required fields (unlike Cut) — retilt *reads* the operator's
+floor region from it (§1) but does not add anything to it; the fitted plane and rotation are
+this camera's own derived values, written to `retilt_sidecar.json` instead.
 
 Manifest: one step per camera, `derived` carrying `tilt_deg`, `roll_deg`,
 `gravity_agreement_deg`, `plane_rms_residual_m`; `warnings` for a near-threshold gravity
@@ -208,20 +273,33 @@ disagreement that did not quite trigger rejection; `file_ops` following the `wri
 Reject the camera (exact reason recorded, per-camera — never per-session; retilting has no
 cross-camera dependency) when:
 
-- fewer than a minimum number of floor points are selected across all sampled frames (too
-  little confident floor to fit anything);
-- the plane fit's RMS residual exceeds tolerance — the selected region is not actually
-  planar, so it is probably not the floor (e.g. selection caught a foot, a plate, clutter);
-- the fitted normal disagrees with the **odometry gravity vector** by more than a few degrees
-  — the real check `1-ingestion_orient.md` anticipated reusing "S3 machinery" for. This is
-  the primary defense against a plane fit that is geometrically clean but simply fit to the
-  wrong surface;
-- the derived `tilt` or `roll` exceeds an implausible-for-a-handheld/tripod-phone bound (a
-  sign the fit converged on a degenerate or wrong plane, not evidence of a real 90°-tilted
-  phone);
-- odometry shows the camera translated beyond tolerance across the sampled frames — this
-  breaks the static-camera, one-plane-per-camera assumption the whole stage rests on;
-- the camera's name is neither `Front` nor `Side`, so its selection ROI (§1) is undefined.
+- fewer than `retilt_min_floor_points` (proposed default **500**) floor points are selected
+  across all sampled frames — too little confident floor to fit anything;
+- the plane fit's RMS residual exceeds `retilt_max_plane_rms_m` (proposed default **0.02 m**,
+  i.e. 2 cm — sized against LiDAR noise on a floor patch a few metres out) — the selected
+  region is not actually planar, so it is probably not the floor (e.g. selection caught a
+  foot, a plate, clutter);
+- the derived `tilt` or `roll` exceeds `retilt_max_tilt_deg` / `retilt_max_roll_deg`
+  (proposed default **45°** each) — implausible for a handheld/tripod phone, and a sign the
+  fit converged on a degenerate or wrong plane, not evidence of a real 90°-tilted phone;
+- odometry shows the camera translated beyond `retilt_max_translation_m` (proposed default
+  **0.05 m**) across the sampled frames — this breaks the static-camera, one-plane-per-camera
+  assumption the whole stage rests on;
+- the session's `metadata.yaml` is missing this camera's view-prefixed floor-region fields,
+  fails to parse as `"(x, y)"` (§1), or the parsed region is degenerate (`x0 >= x1` **or**
+  `y1 >= y0` — note `y1 < y0` is the *valid* case under §1's top→bottom, bottom-left/
+  top-right naming, since `bottom_left.y` is numerically larger) or outside `[0, 1]` bounds.
+
+**The odometry-gravity check is warn-only, not a rejection, until calibrated.** The fitted
+normal disagreeing with the **odometry gravity vector** by more than
+`retilt_gravity_tolerance_deg` (proposed default **5°**) is recorded as
+`gravity_agreement_deg` in the sidecar and raised as a manifest warning past tolerance — this is the check
+`1-ingestion_orient.md` anticipated reusing "S3 machinery" for, and is intended as the
+primary defense against a plane fit that is geometrically clean but simply fit to the wrong
+surface. It does not reject on its own yet because the axis-convention chain it depends on
+(assumptions, above) cannot be proven correct from this document alone. A follow-up change
+promotes it to a rejection once real sessions confirm the computed agreement is
+consistently small.
 
 **Exit validation**, on the staged result before publish, mirrors S1 Orient's
 `_validate_exit`: depth remains `uint16`, confidence values remain within `{0, 1, 2}` (never
@@ -230,9 +308,24 @@ depth output dimensions match their inputs (rectification does not resize).
 
 ## Open questions
 
-- Concrete default values for: frame-sampling stride/count for the pooled fit, RMS-residual
-  tolerance, gravity-agreement tolerance (degrees), plausible tilt/roll bounds, and the
-  camera-translation tolerance. Proposed as named, tunable parameters rather than hardcoded.
-- Whether the valid-content bounding box recorded here should additionally be **intersected**
-  across a session's cameras before S4/S5, or whether each camera's box is purely informative
-  and S5 does its own common-region derivation.
+- ~~Concrete default values for: frame-sampling stride/count for the pooled fit,
+  RMS-residual tolerance, gravity-agreement tolerance (degrees), plausible tilt/roll bounds,
+  and the camera-translation tolerance.~~ **Resolved** — proposed defaults are now stated
+  inline in §7 (`retilt_min_floor_points`, `retilt_max_plane_rms_m`,
+  `retilt_gravity_tolerance_deg`, `retilt_max_tilt_deg`/`retilt_max_roll_deg`,
+  `retilt_max_translation_m`), plus `retilt_sample_stride` for §3's "every ~10th frame", as
+  named, tunable parameters rather than hardcoded literals. All are proposals pending
+  calibration against real sessions (§7's warn-only note applies to the gravity tolerance in
+  particular).
+- Each camera's valid-content bounding box now has a definite consumer — S4 Scaling trims to it
+  as a per-camera step before resampling (see `5-scaling.md`). What remains open is only
+  whether these boxes should additionally be **intersected across a session's cameras** for
+  I5's benefit, or whether each camera's box stays purely per-camera and S5 does its own
+  common-region derivation on top. **Still open** — no real S5 implementation exists yet to
+  decide against.
+- The exact schema key for `lift_start_time_side_in_ms`/`lift_end_time_side_in_ms` — real
+  captures now nest them under a new `video:` block, but `2-cut.md`'s current text and Cut's
+  shipped `read_lift_window` still expect them directly under `lift:`. This document assumes
+  whatever S1 Cut resolves that to; retilt reads the same session `metadata.yaml` file.
+  **Still open**, and orthogonal to the floor-region fields this document depends on, which
+  live under `video:` unambiguously in both real sessions inspected.

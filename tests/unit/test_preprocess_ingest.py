@@ -22,6 +22,7 @@ def make_config(tmp_path: Path, **overrides: Any) -> PreprocessConfig:
         raw_root=tmp_path / "raw",
         record_root=tmp_path / "s0",
         cut_root=tmp_path / "s1",
+        retilt_root=tmp_path / "s3",
         output_root=tmp_path / "s2",
         **overrides,
     )

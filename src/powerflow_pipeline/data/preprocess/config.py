@@ -1,4 +1,4 @@
-"""Run configuration for the preprocess pipeline (S0 ingest, S1 cut, S2 orient)."""
+"""Run configuration for the preprocess pipeline (S0 ingest, S1 cut, S2 orient, S3 retilt)."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ class PreprocessConfig(BaseModel):
     raw_root: Path
     record_root: Path
     cut_root: Path
+    retilt_root: Path
     output_root: Path
     rotation: RotationDirection = RotationDirection.CW
     frame_count_tolerance: int = Field(default=1, ge=0)
@@ -32,6 +33,18 @@ class PreprocessConfig(BaseModel):
     require_stopwatch_attestation: bool = False
     overwrite: bool = False
     dry_run: bool = False
+
+    # S3 Retilt tunables (docs/specs/preprocessing/4-retilt.md §3/§7).
+    retilt_sample_stride: int = Field(default=10, ge=1)
+    retilt_max_sampled_frames: int = Field(default=32, ge=1)
+    retilt_max_pooled_points: int = Field(default=200_000, ge=1)
+    retilt_min_floor_points: int = Field(default=500, ge=1)
+    retilt_max_plane_rms_m: float = Field(default=0.02, gt=0)
+    retilt_gravity_tolerance_deg: float = Field(default=5.0, gt=0)
+    retilt_max_tilt_deg: float = Field(default=45.0, gt=0)
+    retilt_max_roll_deg: float = Field(default=45.0, gt=0)
+    retilt_max_translation_m: float = Field(default=0.05, gt=0)
+    retilt_conf2_area_fraction: float = Field(default=1 / 6, gt=0, le=1)
 
     @property
     def stage_roots(self) -> tuple[Path, ...]:
@@ -42,4 +55,4 @@ class PreprocessConfig(BaseModel):
         earlier stage's tree to find out. A new stage adds its root here and inherits the copy.
         """
 
-        return (self.record_root, self.cut_root, self.output_root)
+        return (self.record_root, self.cut_root, self.retilt_root, self.output_root)

@@ -145,8 +145,15 @@ def preflight(intrinsics: Intrinsics, width: int, height: int) -> dict[str, obje
 
 
 @task(retries=1)
-def orient_camera(record: CameraRecord, config: PreprocessConfig) -> StepResult:
-    """Rotate one camera's three image streams to portrait and publish it whole."""
+def orient_camera(
+    record: CameraRecord, config: PreprocessConfig
+) -> tuple[CameraRecord, StepResult]:
+    """Rotate one camera's three image streams to portrait and publish it whole.
+
+    Returns the rotated `CameraRecord` alongside the `StepResult`: S3 Retilt needs S2's
+    *output* geometry (portrait dimensions, rotated `K`), the same shape `cut_camera`
+    already hands its own next stage.
+    """
 
     source = record.source
     destination = config.output_root / record.relative
@@ -159,6 +166,16 @@ def orient_camera(record: CameraRecord, config: PreprocessConfig) -> StepResult:
         record.intrinsics, width=record.rgb_width, height=record.rgb_height, rotation=rotation
     )
     verdict = preflight(rotated, *rgb_size)
+    orient_record = record.model_copy(
+        update={
+            "source": destination,
+            "rgb_width": rgb_size[0],
+            "rgb_height": rgb_size[1],
+            "depth_width": depth_size[0],
+            "depth_height": depth_size[1],
+            "intrinsics": rotated,
+        }
+    )
 
     sidecar = {
         "rotation": rotation.value,
@@ -208,7 +225,7 @@ def orient_camera(record: CameraRecord, config: PreprocessConfig) -> StepResult:
         result.warnings.append("rotated principal point falls outside the portrait image")
 
     if config.dry_run:
-        return result
+        return orient_record, result
 
     staging = create_staging_root(destination)
     try:
@@ -233,7 +250,7 @@ def orient_camera(record: CameraRecord, config: PreprocessConfig) -> StepResult:
     finally:
         cleanup(staging)
 
-    return result
+    return orient_record, result
 
 
 def _validate_exit(

@@ -12,17 +12,23 @@ S0 Ingest → S1 Cut → S2 Orient → S3 Retilt → S4 Scaling → S5 Cropping
 
 For each camera independently, remove a fixed conservative border from every retained frame so
 the output excludes edge content that could differ because of small residual camera translation.
-This is the per-camera operational form of invariant **I5**: *every frame within one camera has
-the same stable image region and dimensions.* It does not attempt to make Front and Side share a
-field of view, nor does it claim exact 3D temporal registration.
+This is the per-camera operational form of invariant **I5** as applied *within* one camera:
+*every frame within one camera has the same stable image region and dimensions.* It does not
+attempt to make Front and Side share a field of view, nor does it claim exact 3D temporal
+registration — **see the open question below**: `1-ingestion_orient.md`'s invariant table
+states I5 as "every image has identical pixel dimensions," which reads as a cross-clip
+guarantee that this per-camera crop does not, by itself, provide.
 
 Cropping is deliberately a guard-band operation, not stabilization. It never shifts, warps, or
 reprojects pixels. Those operations would need depth-aware reprojection to be geometrically
 correct under translation, and are outside this stage's scope.
 
 **In:** one camera's S4-scaled RGB, depth, confidence, `camera_matrix.csv`, and
-`odometry.csv`. **Out:** the same streams cropped to one fixed rectangle, with intrinsics updated
-for the rectangle's new origin and a sidecar that records the measured motion and crop bounds.
+`odometry.csv`. S4 has already trimmed S3's warp-invalid border (`5-scaling.md` §"Step 0"), so
+S5's input is fully valid content and this stage's rectangle is purely the motion guard band
+below — it does not need to consider rectification validity itself. **Out:** the same streams
+cropped to one fixed rectangle, with intrinsics updated for the rectangle's new origin and a
+sidecar that records the measured motion and crop bounds.
 
 ## Assumptions and scope
 
@@ -71,6 +77,12 @@ cover the largest predicted image displacement.
 `Z_guard_m` is the configurable lower quantile of positive, confidence-nonzero depth values across
 the retained camera span. A raw minimum is not used because isolated invalid or noisy values would
 make the crop unnecessarily large. The selected quantile and resulting depth are provenance.
+
+This stage runs after S4 Scaling specifically so that `crop_safety_px` (below) means the same
+physical margin on every camera: the parallax margin itself scales linearly regardless of
+whether it is computed before or after scaling, but the additive `crop_safety_px` guard does
+not — applying it in S4-normalized (common px_per_mm) pixel space, rather than each camera's
+native pixel space, is what makes one configured value comparable across cameras.
 
 For a stream of width `W`, height `H`, and intrinsics `(fx, fy, cx, cy)`, define the farthest
 pixel radii from the principal point:
@@ -194,3 +206,17 @@ Default values require calibration against representative captures before this s
 - Per-frame shifts, camera-motion stabilization, or optical-flow correction.
 - Depth-aware reprojection, occlusion handling, or restoration of parallax-distorted content.
 - Rescaling, interpolation, or modification of depth/confidence values.
+
+## Open questions
+
+- **I5's scope: per-camera or cross-clip.** `1-ingestion_orient.md`'s invariant table states
+  I5 as *"every image has identical pixel dimensions and covers the same physical region"* with
+  no per-camera qualifier — read plainly, that is a promise across the whole session (Front and
+  Side, every clip). This document's Purpose (above) and its Non-goals both explicitly scope
+  I5 down to *within one camera*, and rule out a shared Front/Side rectangle as out of scope.
+  These are two different invariants, not one restated — this document does not currently
+  satisfy the invariant table's literal wording, and `4-retilt.md`'s own open question about
+  intersecting `valid_bounds_px` across a session's cameras is the same fork one stage earlier.
+  **Still open** — needs the owner to decide whether I5 is per-camera (this document is
+  already correct as written) or cross-clip (this document, and likely S4, would need a
+  cross-camera reconciliation step that does not exist yet in any spec).
