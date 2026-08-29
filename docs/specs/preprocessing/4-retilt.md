@@ -7,14 +7,15 @@ Status: **draft** | Derived from: `4-retilt.md` (source note) | Updated: 2026-08
 Add a **Retilt** stage after Orient:
 
 ```text
-S0 Ingest → S1 Cut → S2 Orient → S3 Retilt → S4 Scaling
+S0 Ingest → S1 Cut → S2 Orient → S3 Retilt → S4 Crop
 ```
 
 Rotate every frame so the camera's optical axis is perpendicular to the floor and its image
 plane vertical — as if the phone had been level and plumb at capture time. This establishes
 invariant **I3**: *"Images are undistorted and rectified as if the camera were level (no tilt
-w.r.t. vertical)."* Scale (I4) and common framing (I5) are downstream concerns for S4/S5; this
-stage only removes tilt and roll, never yaw, and never touches scale.
+w.r.t. vertical)."* Metric scale (I4) is carried by depth, not by this stage or any downstream
+one — see `1-ingestion_orient.md` and `5-scaling.md` (retired). Common framing (I5) is S4's
+concern; this stage only removes tilt and roll, never yaw, and never touches scale.
 
 **In:** portrait RGB + depth + confidence + `camera_matrix.csv` + `odometry.csv` — Orient's
 output, already time-aligned and pixel-aligned across streams — plus the session's raw
@@ -26,8 +27,7 @@ plane and applied rotation.
 
 If a camera's floor cannot be fit reliably, the camera is **rejected**, never passed through
 un-retilted or retilted from a bad fit — a silently mistilted clip corrupts every downstream
-geometric assumption (S4 scale, S5 common framing) with no visible symptom in the frame
-itself.
+geometric assumption (S4 common framing) with no visible symptom in the frame itself.
 
 ## Assumptions
 
@@ -228,12 +228,10 @@ applied once per stream (`K` is that stream's own intrinsics — RGB-resolution 
 - **Border handling.** Rectification always exposes invalid border regions (no source pixel
   maps there) and, symmetrically, can push valid content outside the original frame bounds.
   This stage does **not** crop or pad — it records the **valid-content bounding box** (in
-  rectified pixel coordinates) in the sidecar. The consumer is **S4 Scaling, which trims to
-  this box as its first step, before any resampling** (`5-scaling.md` §"Step 0") — not S5,
-  and not because scaling produces "a common output size" (it does not; see the I4/I5 split in
-  `1-ingestion_orient.md`). Deferring the trim to a single downstream consumer, rather than
-  cropping here too, keeps one stage owning what "valid" means instead of letting S3 and S4
-  disagree about it.
+  rectified pixel coordinates) in the sidecar. The consumer is **S4 Crop, which intersects
+  this box with its own motion guard band and crops once** (`6-cropping.md` §2). Deferring the
+  trim to that single downstream consumer, rather than cropping here too, keeps one stage
+  owning what "valid" means instead of letting S3 and S4 disagree about it.
 
 ## 6. Output contract
 
@@ -317,12 +315,13 @@ depth output dimensions match their inputs (rectification does not resize).
   named, tunable parameters rather than hardcoded literals. All are proposals pending
   calibration against real sessions (§7's warn-only note applies to the gravity tolerance in
   particular).
-- Each camera's valid-content bounding box now has a definite consumer — S4 Scaling trims to it
-  as a per-camera step before resampling (see `5-scaling.md`). What remains open is only
-  whether these boxes should additionally be **intersected across a session's cameras** for
-  I5's benefit, or whether each camera's box stays purely per-camera and S5 does its own
-  common-region derivation on top. **Still open** — no real S5 implementation exists yet to
-  decide against.
+- Each camera's valid-content bounding box now has a definite consumer — S4 Crop intersects it
+  with its own motion guard band and crops once, per camera (see `6-cropping.md` §2). What
+  remains open is only whether these boxes should additionally be **intersected across a
+  session's cameras** for I5's benefit, or whether each camera's box stays purely per-camera
+  and S4 does its own common-region derivation on top of that, alone. **Still open** — no real
+  S4 implementation exists yet to decide against; `6-cropping.md`'s own open question is the
+  same fork stated from S4's side.
 - The exact schema key for `lift_start_time_side_in_ms`/`lift_end_time_side_in_ms` — real
   captures now nest them under a new `video:` block, but `2-cut.md`'s current text and Cut's
   shipped `read_lift_window` still expect them directly under `lift:`. This document assumes

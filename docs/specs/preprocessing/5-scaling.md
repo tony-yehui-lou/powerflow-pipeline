@@ -1,121 +1,74 @@
-# View-dependent frame scaling
+# Retired: view-dependent frame scaling
 
-Status: **draft** | Updated: 2026-08-26
+Status: **retired** | Updated: 2026-08-27
 
-## Purpose
+## What this was
 
-Add a **Scaling** stage after Retilt:
+A proposed **Scaling** stage between Retilt and Cropping. It would scale each camera's frames
+by a per-view physical reference — barbell length between the plates for a front-facing video,
+plate diameter for a side-facing video — so that one pixel represented the same real-world
+distance across every clip. This was meant to establish invariant **I4**: *"Scale is constant:
+one pixel means the same physical distance in every clip."*
 
-```text
-S0 Ingest → S1 Cut → S2 Orient → S3 Retilt → S4 Scaling → S5 Cropping
-```
+## Why it was retired
 
-Scale each camera so that the same real-world distance is represented by the same pixel
-distance across clips. This establishes invariant **I4**: *"Scale is constant: one pixel means
-the same physical distance in every clip."*
+Writing this stage's implementation spec surfaced that it has **no data source**. Both halves
+of the measurement it depends on are missing:
 
-**This stage does not produce common pixel dimensions.** That is invariant **I5**, owned by S5
-(`6-cropping.md`) — see the invariant table in `1-ingestion_orient.md`. Because the scale
-factor is derived per camera from a per-camera reference (barbell length or plate size), the
-scaled output width and height differ from camera to camera by design. Do not read "scale to a
-common size" anywhere below as a claim about output dimensions — it means only that px_per_mm
-becomes common.
+- **Where the reference is in the frame.** There is no barbell or plate annotation anywhere.
+  S3 Retilt's floor region works because an operator manually drew it and recorded the
+  coordinates in `metadata.yaml`'s `video:` block; nobody has done the equivalent for a barbell
+  or a plate, and the block holds only floor-region fields today.
+- **How big the reference is in real life.** Neither the real session `metadata.yaml` nor the
+  date-level `meta.yaml` template records a barbell or plate physical size. `lift.weight_in_kg`
+  — which could in principle look up a standard competition-plate diameter — is an unfilled
+  template placeholder in every capture inspected.
 
-**In:** one camera's S3-retilted RGB, depth, confidence, `camera_matrix.csv`, `odometry.csv`,
-and `retilt_sidecar.json` (for `valid_bounds_px`). **Out:** the same streams, trimmed to S3's
-valid region and then uniformly scaled, with intrinsics rewritten for the new origin and scale,
-and a sidecar recording the reference used and the derived factor.
+Supplying both would mean either hand-annotating every existing and future capture, or training
+a barbell/plate detector — a substantial project of its own, whose errors would silently
+corrupt downstream geometry with no visible symptom in the frame, exactly the failure mode
+these specs otherwise refuse to pass through.
 
-## Step 0 — trim the rectified valid region, before any resampling
+## The measurement that made retiring it safe
 
-S3 Retilt's rotation leaves a border with no source pixel (`valid_bounds_px` in
-`retilt_sidecar.json`, `4-retilt.md` §5) and deliberately does not crop it. This stage trims to
-that box **first, before any scaling resampling runs**:
+Downstream consumers were confirmed to work off **relative lengths within a clip**, not
+absolute cross-video pixel comparisons — so a per-camera scale factor was never actually load-
+bearing for that use. Measured across the four cameras in `data/raw/11 July` (S3-retilted
+output, `../data/s3_retilt_output/`), using each camera's median depth and RGB-resolution `fx`:
 
-- Resampling blends neighbouring pixels. Scaling across the valid/invalid boundary before
-  trimming would blend undefined border content into real footage along the edge.
-- The scale reference itself (barbell length, plate size) must be measured in a frame that is
-  entirely valid content — measuring it across a partially-blank frame is meaningless.
+| camera | fx (px) | median depth | px/mm at that depth |
+|---|---|---|---|
+| 30kg_Set1/Front | 1343.00 | 5.69 m | 0.2360 |
+| 30kg_Set1/Side | 1336.02 | 6.79 m | 0.1967 |
+| 50kg_Set3/Front | 1344.31 | 5.98 m | 0.2248 |
+| 50kg_Set3/Side | 1339.03 | 6.34 m | 0.2111 |
 
-RGB is sliced losslessly to `valid_bounds_px` — no interpolation. Depth and confidence are
-sliced to the same rectangle mapped to their own resolution and rounded **inward**, so every
-retained depth/confidence pixel lies inside the RGB region — the identical formula S5 Cropping
-uses for its own crop (`6-cropping.md` §2, rounding rule at lines 105–112): for RGB bounds
-`[x0, y0, x1, y1]` and depth dimensions `(W_d, H_d)`,
+Focal lengths are effectively identical (same phone), so all variation is camera-to-subject
+distance. The overall 1.20× spread is dominated by Front-vs-Side, an inherent viewpoint
+difference no scalar rescale corrects. **Restricted to the same view across sessions, the
+spread is only 5–7%** — trivially absorbed by ordinary scale augmentation during training, and
+far smaller than the error a barbell/plate detector would plausibly introduce.
 
-```text
-x0_d = ceil(x0 * W_d / W)     x1_d = floor(x1 * W_d / W)
-y0_d = ceil(y0 * H_d / H)     y1_d = floor(y1 * H_d / H)
-```
+## What replaced it
 
-Reusing this formula rather than restating it independently keeps S4's trim and S5's crop from
-disagreeing about how RGB bounds map to depth bounds.
+- **Metric scale is carried by the depth stream and intrinsics**, not by pixel size. Real-world
+  distances (bar velocity, bar path, plate positions) are computed from depth and
+  `camera_matrix.csv` directly; the image was never the right place to encode scale, and
+  nothing downstream needed it to be. See the restated invariant **I4** in
+  `1-ingestion_orient.md`.
+- **The trim this stage would also have owned did not go away with it.** S3 Retilt's rotation
+  leaves a warp-invalid border with no source pixel (12–14% of frame height on real captures,
+  and it *varies per camera* — a camera-identity leak worth removing on its own). That trim
+  moved into **S4 Crop** (`6-cropping.md`), which already computes and applies one rectangle
+  per camera; it now intersects S3's valid-content box with its own motion guard band and
+  crops once, at no extra decode/re-encode cost.
 
-## Procedure
+## What would have to change to revive this
 
-1. Identify whether the video is front-facing or side-facing.
-2. Select the scale reference for that view:
-   - For a front-facing video, use the barbell length between the plates.
-   - For a side-facing video, use the plate size.
-3. Derive the scale factor `s` from the measured reference, in the **trimmed** frame from Step
-   0.
-4. Resample every frame — RGB and depth/confidence alike — by `s`.
-
-Locating the reference (the barbell/plate detection itself) is undesigned and out of scope for
-this document.
-
-## Resampling rules
-
-- **RGB:** bilinear or bicubic — a photometric stream tolerates interpolation.
-- **Depth and confidence:** **nearest-neighbour only**, the same rule S1 Orient and S3 Retilt
-  already use (`4-retilt.md` §5): interpolating depth fabricates values across object edges,
-  and interpolating confidence between `0` and `2` invents a `1` the sensor never reported.
-  Depth stays `uint16`; confidence stays `⊆ {0, 1, 2}`.
-- Scaling relocates depth pixels but must **not** rescale the millimetre depth *values* —
-  resizing the image does not change metric distance to the floor or the subject.
-
-## `camera_matrix.csv` rewrite
-
-Trim (Step 0), then scale, applied to intrinsics in that same order. Reuse the pixel-centre
-convention already fixed for S3 (`4-retilt.md` §2):
-
-```text
-fx' = fx * s                        fy' = fy * s
-cx' = ((cx - x0) + 0.5) * s - 0.5   cy' = ((cy - y0) + 0.5) * s - 0.5
-```
-
-where `(x0, y0)` is the trimmed region's origin from Step 0. Unlike S3 Retilt — a pure rotation
-that leaves intrinsics unchanged — this stage's trim-and-scale genuinely changes the geometry
-the matrix describes, so it must set `k_rewritten: true`.
-
-## Output contract
-
-New stage directory, e.g. `../data/s4_scale_output/`, mirroring the existing
-`<date>/<session>/<camera>/` layout:
-
-- `rgb.mp4` — trimmed, scaled, re-encoded.
-- `depth/`, `confidence/` — trimmed and scaled frame-by-frame, `uint16` / `{0,1,2}`
-  respectively, same frame count and filenames as the input.
-- `camera_matrix.csv` — trimmed-and-scaled-frame intrinsics.
-- `odometry.csv`, `imu.csv` — copied unchanged; they describe physical pose, not image-plane
-  geometry.
-- `scale_sidecar.json`, containing at minimum:
-  - `view: "front" | "side"` and which reference was used;
-  - the measured reference value and the derived scale factor `s`;
-  - resulting `px_per_mm` (or equivalent);
-  - `valid_bounds_px` consumed from S3's sidecar;
-  - `rgb_input_size`, `rgb_output_size`, `depth_input_size`, `depth_output_size` — **output
-    dimensions vary per camera by design**, not a bug to reconcile here;
-  - `k_rewritten: true`.
-
-`metadata.yaml` gains no required fields.
-
-## Non-goals
-
-- **Common pixel dimensions across cameras** — that is I5, owned by S5 Cropping.
-- **Motion guard-band cropping** — also S5's job; S5 runs after this stage precisely so that
-  its `crop_safety_px` guard means the same physical margin on every camera, once px_per_mm is
-  common (see `6-cropping.md` §2).
-- Rescaling, reinterpreting, or otherwise modifying depth/confidence *values* — only their
-  pixel positions change.
-- Detecting the barbell or plate reference itself.
+1. A reliable source for the reference measurement — either an operator annotation added to
+   `metadata.yaml`'s `video:` block (mirroring the floor-region fields), or a trained detector
+   with a measured, acceptable error rate.
+2. A re-examination of whether pixel-space scale normalization is still worth doing at all,
+   given depth already supplies metric truth for every real-world-unit use case identified so
+   far — reviving this stage without that check would be solving a problem that may no longer
+   exist.

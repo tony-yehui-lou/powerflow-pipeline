@@ -38,9 +38,9 @@ acceptance criteria for the whole pipeline — each stage exists to establish ex
 
 | I3 | Images are **undistorted** and rectified as if the camera were **level** (no tilt w.r.t. vertical). | S3 |
 
-| I4 | **Scale is constant**: one pixel means the same physical distance in every clip. | S4 |
+| I4 | **Metric scale is carried by depth**: real-world distances come from the depth stream and `camera_matrix.csv`, not from pixel size. Pixel-space scale normalization was attempted and retired — see `5-scaling.md`. | S0–S3 |
 
-| I5 | Every image has **identical pixel dimensions** and covers the **same physical region**. | S5 |
+| I5 | Every image has **identical pixel dimensions** and covers the **same physical region**. | S4 |
 
   
 
@@ -166,7 +166,7 @@ the portrait frame. Rotating the pixels back to portrait therefore *restores* ag
 
 image and `K`. **Do not rewrite the camera matrix.** Rewriting it would apply the rotation a second
 
-time, in the opposite direction, and every geometric step downstream (S3, S4, S5) would be silently
+time, in the opposite direction, and every geometric step downstream (S3, S4) would be silently
 
 wrong — with no visible symptom in the images themselves.
 

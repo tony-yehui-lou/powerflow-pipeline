@@ -1,8 +1,7 @@
 """Find the cameras in a raw capture tree.
 
 `common/discovery.discover_scans` does not fit here: it looks for `meta.json` + `frames/`
-in immediate children. This capture is `<date>/<session>/<camera>`, and a camera-session
-is not a scan.
+in immediate children, and a camera-session is not a scan.
 """
 
 from __future__ import annotations
