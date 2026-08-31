@@ -77,6 +77,8 @@ class MakeCamera(Protocol):
         floor_tilt_deg: float = ...,
         floor_roll_deg: float = ...,
         floor_distance_m: float = ...,
+        odometry_translation: Callable[[int], tuple[float, float, float]] | None = ...,
+        rgb_size: tuple[int, int] = ...,
     ) -> Path: ...
 
 
@@ -214,6 +216,8 @@ def make_camera() -> MakeCamera:
         floor_tilt_deg: float = 0.0,
         floor_roll_deg: float = 0.0,
         floor_distance_m: float = 1.5,
+        odometry_translation: Callable[[int], tuple[float, float, float]] | None = None,
+        rgb_size: tuple[int, int] = RGB_SIZE,
     ) -> Path:
         confidence_frames = depth_frames if confidence_frames is None else confidence_frames
         odometry_rows = depth_frames if odometry_rows is None else odometry_rows
@@ -223,7 +227,15 @@ def make_camera() -> MakeCamera:
         camera_dir.mkdir(parents=True)
 
         if "rgb" not in omit:
-            _write_rgb(camera_dir / "rgb.mp4", rgb_frames, RGB_SIZE, creation_time)
+            _write_rgb(camera_dir / "rgb.mp4", rgb_frames, rgb_size, creation_time)
+
+        # ODOMETRY_FX/CX/CY are tuned to RGB_SIZE exactly (centred, correct FOV); a caller
+        # that overrides rgb_size gets them scaled proportionally so the principal point
+        # stays centred and the FOV stays constant -- identity when rgb_size == RGB_SIZE, so
+        # every existing caller (which never overrides it) is unaffected byte-for-byte.
+        scale_x = rgb_size[0] / RGB_SIZE[0]
+        scale_y = rgb_size[1] / RGB_SIZE[1]
+        scaled_cx, scaled_cy = ODOMETRY_CX * scale_x, ODOMETRY_CY * scale_y
 
         floor_depth: np.ndarray | None = None
         floor_confidence: np.ndarray | None = None
@@ -235,10 +247,10 @@ def make_camera() -> MakeCamera:
             )
             floor_depth, floor_confidence = _render_floor_plane(
                 depth_size,
-                RGB_SIZE,
-                avg_fx,
-                ODOMETRY_CX,
-                ODOMETRY_CY,
+                rgb_size,
+                avg_fx * scale_x,
+                scaled_cx,
+                scaled_cy,
                 floor_tilt_deg,
                 floor_roll_deg,
                 floor_distance_m,
@@ -280,10 +292,12 @@ def make_camera() -> MakeCamera:
                 " distortion_center_x, distortion_center_y"
             ]
             for i in range(odometry_rows):
-                fx = ODOMETRY_FX[i % len(ODOMETRY_FX)]
+                fx = ODOMETRY_FX[i % len(ODOMETRY_FX)] * scale_x
+                fy = ODOMETRY_FX[i % len(ODOMETRY_FX)] * scale_y
+                x, y, z = odometry_translation(i) if odometry_translation else (0.0, 0.0, 0.0)
                 rows.append(
-                    f"{uptime_base + i / odometry_hz:.6f}, {i:06d}, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,"
-                    f" 1.0, {fx}, {fx}, {ODOMETRY_CX}, {ODOMETRY_CY}, , "
+                    f"{uptime_base + i / odometry_hz:.6f}, {i:06d}, {x}, {y}, {z}, 0.0, 0.0, 0.0,"
+                    f" 1.0, {fx}, {fy}, {scaled_cx}, {scaled_cy}, , "
                 )
             (camera_dir / "odometry.csv").write_text("\n".join(rows) + "\n")
 

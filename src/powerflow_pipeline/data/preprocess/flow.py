@@ -20,6 +20,7 @@ from powerflow_pipeline.data.common.manifest import RunManifest, emit_manifest
 from powerflow_pipeline.data.common.models import RejectedScan, ScanOutcome
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig
 from powerflow_pipeline.data.preprocess.models import CameraDir, CameraRecord, CutInterval
+from powerflow_pipeline.data.preprocess.tasks.crop import crop_camera
 from powerflow_pipeline.data.preprocess.tasks.cut import cut_camera, resolve_cut_interval
 from powerflow_pipeline.data.preprocess.tasks.discover import discover_sessions
 from powerflow_pipeline.data.preprocess.tasks.ingest import ingest_camera
@@ -77,7 +78,8 @@ def preprocess(config: PreprocessConfig) -> RunManifest:
                 orient_record, orient_step = orient_camera(cut_record, config)
                 # A camera rejected here has already published S2 output -- the same
                 # shape as a camera rejected at S2 having already published S1 output.
-                _, retilt_step = retilt_camera(orient_record, config.raw_root, config)
+                retilt_record, retilt_step = retilt_camera(orient_record, config.raw_root, config)
+                _, crop_step = crop_camera(retilt_record, config)
             except ScanRejected as rejection:
                 manifest.rejected_scans.append(
                     RejectedScan(
@@ -92,10 +94,25 @@ def preprocess(config: PreprocessConfig) -> RunManifest:
                     scan_id=camera.camera_id,
                     source=camera.source,
                     status="planned" if config.dry_run else "published",
-                    steps=["ingest", "cut", "orient", "retilt"],
-                    derived={**cut_step.derived, **orient_step.derived, **retilt_step.derived},
-                    warnings=cut_step.warnings + orient_step.warnings + retilt_step.warnings,
-                    file_ops=cut_step.file_ops + orient_step.file_ops + retilt_step.file_ops,
+                    steps=["ingest", "cut", "orient", "retilt", "crop"],
+                    derived={
+                        **cut_step.derived,
+                        **orient_step.derived,
+                        **retilt_step.derived,
+                        **crop_step.derived,
+                    },
+                    warnings=(
+                        cut_step.warnings
+                        + orient_step.warnings
+                        + retilt_step.warnings
+                        + crop_step.warnings
+                    ),
+                    file_ops=(
+                        cut_step.file_ops
+                        + orient_step.file_ops
+                        + retilt_step.file_ops
+                        + crop_step.file_ops
+                    ),
                 )
             )
 

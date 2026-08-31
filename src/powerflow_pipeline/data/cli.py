@@ -36,6 +36,9 @@ def preprocess(
     retilt_root: Annotated[
         Path, typer.Option("--retilt", help="Where S3 publishes the rectified streams.")
     ],
+    crop_root: Annotated[
+        Path, typer.Option("--crop", help="Where S4 publishes the cropped streams.")
+    ],
     rotation: Annotated[
         RotationDirection,
         typer.Option("--rotation", help="Direction that makes the lifter upright."),
@@ -47,8 +50,8 @@ def preprocess(
         bool, typer.Option("--overwrite", help="Replace cameras already published.")
     ] = False,
 ) -> None:
-    """Ingest a raw capture (S0), cut it to the lift window (S1), rotate it (S2), and
-    retilt it level with the floor (S3).
+    """Ingest a raw capture (S0), cut it to the lift window (S1), rotate it (S2),
+    retilt it level with the floor (S3), and crop it to a stable common region (S4).
 
     There is no `--in-place` mode: it would rewrite the raw capture, and raw data is
     write-once. Each stage publishes to its own output root instead.
@@ -59,6 +62,7 @@ def preprocess(
         record_root=record_root,
         cut_root=cut_root,
         retilt_root=retilt_root,
+        crop_root=crop_root,
         output_root=output_root,
         rotation=rotation,
         dry_run=dry_run,

@@ -260,10 +260,21 @@ Default values require calibration against representative captures before this s
   no per-camera qualifier — read plainly, that is a promise across the whole session (Front and
   Side, every clip). This document's Purpose (above) and its Non-goals both explicitly scope
   I5 down to *within one camera*, and rule out a shared Front/Side rectangle as out of scope.
-  These are two different invariants, not one restated — this document does not currently
-  satisfy the invariant table's literal wording, and `4-retilt.md`'s own open question about
-  intersecting `valid_bounds_px` across a session's cameras is the same fork one stage earlier.
-  **Still open** — needs the owner to decide whether I5 is per-camera (this document is
-  already correct as written) or cross-clip (this document would need a cross-camera
-  reconciliation step, applied to the two cameras' `valid_bounds_px`/`crop_bounds_px`, that
-  does not exist yet in any spec).
+
+  **Resolved (implemented per-camera, exactly as §3 specifies.)** Verified against the four
+  real cameras in `data/raw/11 July` (S4 run 2026-08-30, against the existing S3 output): each
+  camera keeps its own rectangle and its own output size —
+
+  | camera | `crop_bounds_px` | RGB output size |
+  |---|---|---|
+  | 30kg_Set1/Front | `[10, 238, 1430, 1910]` | 1420×1672 |
+  | 30kg_Set1/Side | `[18, 268, 1422, 1908]` | 1404×1640 |
+  | 50kg_Set3/Front | `[10, 241, 1430, 1909]` | 1420×1668 |
+  | 50kg_Set3/Side | `[21, 246, 1419, 1908]` | 1398×1662 |
+
+  Four different output sizes, so `1-ingestion_orient.md`'s invariant table wording ("every
+  image has identical pixel dimensions") is *not* satisfied by S4 alone — that would require a
+  separate cross-camera reconciliation step, applied to the two cameras' `crop_bounds_px`,
+  which does not exist in any spec. This was a deliberate scope decision (Non-goals, above),
+  not an oversight; `4-retilt.md`'s matching open question about `valid_bounds_px` should be
+  updated to point here rather than carrying its own separate resolution.

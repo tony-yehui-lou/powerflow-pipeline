@@ -293,7 +293,7 @@ def valid_bounds(h: np.ndarray, size: tuple[int, int]) -> CropBounds:
     )
 
 
-def _quat_to_matrix(qx: float, qy: float, qz: float, qw: float) -> np.ndarray:
+def quat_to_matrix(qx: float, qy: float, qz: float, qw: float) -> np.ndarray:
     """Standard unit-quaternion -> rotation-matrix conversion, `(x, y, z, w)` order."""
 
     matrix: np.ndarray = Rotation.from_quat([qx, qy, qz, qw]).as_matrix()
@@ -310,7 +310,7 @@ def gravity_down_camera(qx: float, qy: float, qz: float, qw: float) -> np.ndarra
     rotation of the image (not the odometry columns). See 4-retilt.md Assumptions.
     """
 
-    r_wc = _quat_to_matrix(qx, qy, qz, qw)  # world -> ARKit camera-local
+    r_wc = quat_to_matrix(qx, qy, qz, qw)  # world -> ARKit camera-local
     g_world = np.array([0.0, -1.0, 0.0])  # ARKit world is gravity-aligned, Y up
     g_arkit = r_wc.T @ g_world
     g_cv = np.diag([1.0, -1.0, -1.0]) @ g_arkit  # ARKit (Y up, Z back) -> CV (Y down, Z fwd)

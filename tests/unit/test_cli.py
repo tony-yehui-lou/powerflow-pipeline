@@ -41,6 +41,8 @@ def test_preprocess_command_accepts_retilt_root(tmp_path: Path) -> None:
             str(tmp_path / "s1"),
             "--retilt",
             str(tmp_path / "s3"),
+            "--crop",
+            str(tmp_path / "s4"),
             "--output",
             str(tmp_path / "s2"),
         ],

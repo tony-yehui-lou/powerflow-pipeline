@@ -29,14 +29,19 @@ def build_capture(
     make_meta_template(raw)
 
     # cnj_45kg_Set1: a healthy session with a Side lift window and a real, fittable floor.
-    # A larger depth frame than the other fixtures' default: it must pool >= the default
-    # `retilt_min_floor_points` (500) from a single sampled frame for the CLI test below,
-    # which builds its config straight from CLI flags with no tunable overrides.
+    # A larger frame than the other fixtures' default: it must pool >= the default
+    # `retilt_min_floor_points` (500) from a single sampled frame, and its default S4 crop
+    # guard band (8px each side, sized for real ~1440px-wide frames) must stay well under
+    # `crop_max_crop_fraction` (0.25) -- both for the CLI test below, which builds its config
+    # straight from CLI flags with no tunable overrides. `rgb_size`/`depth_size` scale the
+    # fixture's odometry intrinsics proportionally (conftest.py), so this stays a correctly
+    # centred, constant-FOV "faithful miniature" at the larger size.
     floor = {
         "render_floor_plane": True,
         "floor_tilt_deg": 8.0,
         "floor_roll_deg": -2.0,
-        "depth_size": (64, 48),  # landscape (W > H), like the real capture -- see DEPTH_SIZE
+        "depth_size": (128, 96),  # landscape (W > H), like the real capture -- see DEPTH_SIZE
+        "rgb_size": (128, 96),
     }
     make_camera(raw, session="cnj_45kg_Set1", camera="Front", rgb_frames=5, depth_frames=6, **floor)
     make_camera(raw, session="cnj_45kg_Set1", camera="Side", rgb_frames=5, depth_frames=6, **floor)
@@ -63,6 +68,7 @@ def make_config(tmp_path: Path, raw: Path, **overrides: Any) -> PreprocessConfig
         record_root=tmp_path / "s0_ingest_output",
         cut_root=tmp_path / "s1_cut_output",
         retilt_root=tmp_path / "s3_retilt_output",
+        crop_root=tmp_path / "s4_crop_output",
         output_root=tmp_path / "s2_orient_output",
         **overrides,
     )
@@ -91,7 +97,9 @@ def test_the_run_cuts_and_rotates_valid_cameras(
     assert all("cut" in scan.steps for scan in manifest.scans)
     assert all("orient" in scan.steps for scan in manifest.scans)
     assert all("retilt" in scan.steps for scan in manifest.scans)
+    assert all("crop" in scan.steps for scan in manifest.scans)
     assert (config.retilt_root / "9 July" / "cnj_45kg_Set1" / "Front" / "rgb.mp4").is_file()
+    assert (config.crop_root / "9 July" / "cnj_45kg_Set1" / "Front" / "rgb.mp4").is_file()
     rejections = {rejected.scan_id: rejected.reason for rejected in manifest.rejected_scans}
     assert rejections["9 July/cnj_55kg_Set1/Front"] == "missing required stream: imu.csv"
     assert rejections["9 July/cnj_55kg_Set1/Side"] == "missing required stream: depth"
@@ -234,6 +242,8 @@ def test_the_cli_runs_the_flow(
             str(s1),
             "--retilt",
             str(s3),
+            "--crop",
+            str(tmp_path / "s4"),
             "--output",
             str(s2),
             "--rotation",
@@ -244,4 +254,5 @@ def test_the_cli_runs_the_flow(
     assert result.exit_code == 0, result.output
     assert "processed 2 camera(s), rejected 3" in result.output
     assert (s2 / "9 July" / "cnj_45kg_Set1" / "Front" / "sidecar.json").is_file()
+    assert (tmp_path / "s4" / "9 July" / "cnj_45kg_Set1" / "Front" / "crop_sidecar.json").is_file()
     assert (s1 / "9 July" / "cnj_45kg_Set1" / "Front" / "cut_sidecar.json").is_file()

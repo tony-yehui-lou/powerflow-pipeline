@@ -26,6 +26,7 @@ class PreprocessConfig(BaseModel):
     record_root: Path
     cut_root: Path
     retilt_root: Path
+    crop_root: Path
     output_root: Path
     rotation: RotationDirection = RotationDirection.CW
     frame_count_tolerance: int = Field(default=1, ge=0)
@@ -46,6 +47,14 @@ class PreprocessConfig(BaseModel):
     retilt_max_translation_m: float = Field(default=0.05, gt=0)
     retilt_conf2_area_fraction: float = Field(default=1 / 6, gt=0, le=1)
 
+    # S4 Crop tunables (docs/specs/preprocessing/6-cropping.md §Configuration).
+    crop_max_residual_translation_m: float = Field(default=0.025, gt=0)
+    crop_depth_guard_quantile: float = Field(default=0.05, gt=0, lt=1)
+    crop_safety_px: int = Field(default=8, ge=0)
+    crop_max_crop_fraction: float = Field(default=0.25, gt=0, lt=1)
+    crop_depth_sample_stride: int = Field(default=10, ge=1)
+    crop_max_sampled_depth_frames: int = Field(default=32, ge=1)
+
     @property
     def stage_roots(self) -> tuple[Path, ...]:
         """Every tree this run publishes into, in stage order.
@@ -55,4 +64,4 @@ class PreprocessConfig(BaseModel):
         earlier stage's tree to find out. A new stage adds its root here and inherits the copy.
         """
 
-        return (self.record_root, self.cut_root, self.retilt_root, self.output_root)
+        return (self.record_root, self.cut_root, self.retilt_root, self.crop_root, self.output_root)
