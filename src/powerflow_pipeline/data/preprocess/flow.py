@@ -20,20 +20,33 @@ from powerflow_pipeline.data.common.manifest import RunManifest, emit_manifest
 from powerflow_pipeline.data.common.models import RejectedScan, ScanOutcome
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig
 from powerflow_pipeline.data.preprocess.models import CameraDir, CameraRecord, CutInterval
+from powerflow_pipeline.data.preprocess.pose_model import PoseModel
 from powerflow_pipeline.data.preprocess.tasks.crop import crop_camera
 from powerflow_pipeline.data.preprocess.tasks.cut import cut_camera, resolve_cut_interval
 from powerflow_pipeline.data.preprocess.tasks.discover import discover_sessions
 from powerflow_pipeline.data.preprocess.tasks.ingest import ingest_camera
 from powerflow_pipeline.data.preprocess.tasks.metadata import write_session_metadata
 from powerflow_pipeline.data.preprocess.tasks.orient import orient_camera
+from powerflow_pipeline.data.preprocess.tasks.pose import (
+    detect_pose_camera,
+    ensure_skeleton_published,
+)
 from powerflow_pipeline.data.preprocess.tasks.retilt import retilt_camera
 
 PIPELINE = "preprocess"
 
 
 @flow(name=PIPELINE)
-def preprocess(config: PreprocessConfig) -> RunManifest:
-    """Ingest, cut to the shared lift window, and rotate to portrait. Or reject, with a reason."""
+def preprocess(config: PreprocessConfig, pose_model: PoseModel | None = None) -> RunManifest:
+    """Ingest, cut to the shared lift window, and rotate to portrait. Or reject, with a reason.
+
+    S5 Pose runs after S4 Crop for every surviving camera, but only when `pose_model` is
+    given -- a real model is issue #118, still open, so every existing caller that doesn't
+    pass one gets exactly today's S0-S4 behaviour.
+    """
+
+    if pose_model is not None and config.pose_root is None:
+        raise ValueError("pose_model was given but config.pose_root is unset")
 
     context = RunContext.create(
         pipeline=PIPELINE,
@@ -49,6 +62,10 @@ def preprocess(config: PreprocessConfig) -> RunManifest:
         output_mode=context.output_mode,
         dry_run=context.dry_run,
     )
+
+    if pose_model is not None and not config.dry_run:
+        assert config.pose_root is not None  # checked above
+        ensure_skeleton_published(config.pose_root, overwrite=config.overwrite)
 
     cameras = list(discover_sessions(config.raw_root))
     sessions: dict[tuple[str, str], list[CameraRecord]] = defaultdict(list)
@@ -79,7 +96,34 @@ def preprocess(config: PreprocessConfig) -> RunManifest:
                 # A camera rejected here has already published S2 output -- the same
                 # shape as a camera rejected at S2 having already published S1 output.
                 retilt_record, retilt_step = retilt_camera(orient_record, config.raw_root, config)
-                _, crop_step = crop_camera(retilt_record, config)
+                crop_record, crop_step = crop_camera(retilt_record, config)
+
+                steps = ["ingest", "cut", "orient", "retilt", "crop"]
+                derived = {
+                    **cut_step.derived,
+                    **orient_step.derived,
+                    **retilt_step.derived,
+                    **crop_step.derived,
+                }
+                warnings = (
+                    cut_step.warnings
+                    + orient_step.warnings
+                    + retilt_step.warnings
+                    + crop_step.warnings
+                )
+                file_ops = (
+                    cut_step.file_ops
+                    + orient_step.file_ops
+                    + retilt_step.file_ops
+                    + crop_step.file_ops
+                )
+
+                if pose_model is not None:
+                    _, pose_step = detect_pose_camera(crop_record, config, pose_model)
+                    steps.append("pose")
+                    derived = {**derived, **pose_step.derived}
+                    warnings = warnings + pose_step.warnings
+                    file_ops = file_ops + pose_step.file_ops
             except ScanRejected as rejection:
                 manifest.rejected_scans.append(
                     RejectedScan(
@@ -94,25 +138,10 @@ def preprocess(config: PreprocessConfig) -> RunManifest:
                     scan_id=camera.camera_id,
                     source=camera.source,
                     status="planned" if config.dry_run else "published",
-                    steps=["ingest", "cut", "orient", "retilt", "crop"],
-                    derived={
-                        **cut_step.derived,
-                        **orient_step.derived,
-                        **retilt_step.derived,
-                        **crop_step.derived,
-                    },
-                    warnings=(
-                        cut_step.warnings
-                        + orient_step.warnings
-                        + retilt_step.warnings
-                        + crop_step.warnings
-                    ),
-                    file_ops=(
-                        cut_step.file_ops
-                        + orient_step.file_ops
-                        + retilt_step.file_ops
-                        + crop_step.file_ops
-                    ),
+                    steps=steps,
+                    derived=derived,
+                    warnings=warnings,
+                    file_ops=file_ops,
                 )
             )
 

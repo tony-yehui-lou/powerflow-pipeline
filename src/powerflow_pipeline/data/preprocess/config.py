@@ -28,6 +28,10 @@ class PreprocessConfig(BaseModel):
     retilt_root: Path
     crop_root: Path
     output_root: Path
+    # S5 Pose is optional -- unset until a `PoseModel` (issue #118) is wired in at the flow
+    # call site. `preprocess()` skips the stage entirely when `pose_model` isn't given, so
+    # this stays unset for every existing caller.
+    pose_root: Path | None = None
     rotation: RotationDirection = RotationDirection.CW
     frame_count_tolerance: int = Field(default=1, ge=0)
     rgb_crf: int = Field(default=16, ge=0, le=51)
@@ -62,6 +66,10 @@ class PreprocessConfig(BaseModel):
         `metadata.yaml` is written to each: a stage's output says what the pixels are, never
         which lift they came from, and a consumer should not have to reach back into an
         earlier stage's tree to find out. A new stage adds its root here and inherits the copy.
+
+        S5 Pose deliberately does not: unlike S0-S4, it doesn't run for every camera in every
+        run (see `pose_root`), so it would leave orphan `metadata.yaml` files with no pose
+        output beside them whenever it's unset or a camera is skipped.
         """
 
         return (self.record_root, self.cut_root, self.retilt_root, self.crop_root, self.output_root)

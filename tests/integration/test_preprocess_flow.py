@@ -15,6 +15,8 @@ from typer.testing import CliRunner
 
 from powerflow_pipeline.data.cli import app
 from powerflow_pipeline.data.common.manifest import artifact_key
+from powerflow_pipeline.data.common.models import HUMAN_SKELETON, JointId, JointSeries
+from powerflow_pipeline.data.common.pose_storage import pose_path, skeleton_path
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig
 from powerflow_pipeline.data.preprocess.flow import preprocess
 from tests.conftest import MakeCamera
@@ -256,3 +258,63 @@ def test_the_cli_runs_the_flow(
     assert (s2 / "9 July" / "cnj_45kg_Set1" / "Front" / "sidecar.json").is_file()
     assert (tmp_path / "s4" / "9 July" / "cnj_45kg_Set1" / "Front" / "crop_sidecar.json").is_file()
     assert (s1 / "9 July" / "cnj_45kg_Set1" / "Front" / "cut_sidecar.json").is_file()
+
+
+# --- S5 pose (issue #116): opt-in, only when a `PoseModel` is supplied --------------------
+
+
+class _StubPoseModel:
+    """A fixed, valid pose for every frame -- stands in for the real model (issue #118)."""
+
+    def predict(self, rgb_path: Path, n_frames: int) -> dict[JointId, JointSeries]:
+        series = JointSeries(
+            position=tuple((0.0, 0.0, 0.0) for _ in range(n_frames)),
+            pixel_position=tuple((0, 0) for _ in range(n_frames)),
+            confidence=tuple(0.9 for _ in range(n_frames)),
+        )
+        return {joint: series for joint in HUMAN_SKELETON.joints}
+
+
+def test_the_run_detects_pose_when_a_model_is_given(
+    tmp_path: Path,
+    make_camera: MakeCamera,
+    make_meta_template: Any,
+    make_session_metadata: Any,
+) -> None:
+    raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
+    config = make_config(tmp_path, raw, pose_root=tmp_path / "s5_pose_output")
+
+    manifest = preprocess(config, pose_model=_StubPoseModel())
+
+    assert all("pose" in scan.steps for scan in manifest.scans)
+    assert skeleton_path(config.pose_root).is_file()
+    for scan in manifest.scans:
+        date, session, camera = scan.scan_id.split("/", 2)
+        assert pose_path(config.pose_root, Path(date) / session, camera).is_file()
+
+
+def test_the_run_skips_pose_without_a_model(
+    tmp_path: Path,
+    make_camera: MakeCamera,
+    make_meta_template: Any,
+    make_session_metadata: Any,
+) -> None:
+    raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
+    config = make_config(tmp_path, raw)
+
+    manifest = preprocess(config)
+
+    assert all("pose" not in scan.steps for scan in manifest.scans)
+
+
+def test_preprocess_rejects_a_pose_model_without_a_pose_root(
+    tmp_path: Path,
+    make_camera: MakeCamera,
+    make_meta_template: Any,
+    make_session_metadata: Any,
+) -> None:
+    raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
+    config = make_config(tmp_path, raw)
+
+    with pytest.raises(ValueError, match="pose_root"):
+        preprocess(config, pose_model=_StubPoseModel())
