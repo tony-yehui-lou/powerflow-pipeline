@@ -393,3 +393,47 @@ August files (surfaced in
 the derived block per §5, never rewritten — raw is write-once); the six duplicated lift windows
 and `CnJ/82kgCnJ2`'s overrun (Known data caveats, above) — those are data fixes, not this
 spec's layout fix.
+
+---
+
+## Feedback (2026-09-18) — incorporated into `2026-09-18-single-camera-oblique-capture-design.md`
+
+Not edited above; recorded here and carried into the successor document.
+
+1. **§0 and §6 are stale in the operator's favour, and stale in one important way against it.**
+   Three of the four data defects this document lists are fixed in the raw tree as of
+   2026-09-18: the six duplicated lift windows are now 29 distinct ones, `CnJ/82kgCnJ2` no
+   longer overruns its recording, and the five `CnJ/*` files now record `type: CnJ` rather than
+   `snch`. The `video:` block defect remains — and is worse than described. Fixing only the key
+   prefix and the y-order, as §6 prescribes, yields a rectangle that sits on **a PA speaker
+   cabinet and a cable bundle**, not floor: fitted RMS 7.1–10.3 cm against the 2 cm gate, roll
+   −36° to −41°. §6's "format fix first, triage after" ordering therefore produces 29
+   rejections at S3, not a run to triage. The successor replaces it with a measured starting
+   rectangle and a per-capture verification envelope.
+
+2. **"One rectangle for 29 trials" is right about the rig and wrong about the scene.** This
+   document treats the single shared rectangle as evidence of careless annotation. Measured
+   over all 29 captures with a correct rectangle, the rig genuinely was static all day —
+   camera height 1.09–1.16 m, tilt −1.73° to −0.09°, roll −2.54° to +0.24°. But a spectator
+   sits in the near foreground during `Snch/50kgSnch1` and `Snch/55kgSnch1`, occluding the
+   floor patch. One rectangle is a defensible *starting point*; it is not a defensible
+   annotation. Expected yield is 28 of 29.
+
+3. **"No geometry, timing, or codec changes" holds for the stream formats and not for the
+   scene.** The August camera is at roughly 45° of azimuth. S3 removes tilt and roll and leaves
+   yaw untouched by design, so an August capture's floor-anchored *horizontal* axes are the
+   camera's, ~45° off the lifter's sagittal plane — while its vertical axis is sound. Anything
+   downstream that reads horizontal bar displacement as sagittal will be wrong by an
+   unrecorded factor and will look plausible. The successor adds an explicit `frame_azimuth`
+   field and an operator-declared `view` annotation, and names S6 Yaw alignment as the
+   follow-up.
+
+4. **§8's S5 note is incomplete.** `CameraName = Literal["Side", "Front"]` makes
+   `PoseDocument` reject any August capture id at runtime (pydantic, not just `mypy`). That is
+   a required change, not a downstream concern.
+
+5. **One new validation the single-camera layout makes possible.** A fit that passes every
+   existing gate can still be wrong: on `55kgSnch1`, one candidate rectangle produced tilt
+   −44.89° with a 0.85 cm RMS — a tight fit to the wrong surface, under the 45° gate by a tenth
+   of a degree. For a static single-camera rig, the day's captures should agree with each
+   other; the successor adds a warn-only day-level tilt/height consistency check.

@@ -16,8 +16,13 @@ import pytest
 from powerflow_pipeline.data.common.context import OutputMode, RunContext
 from powerflow_pipeline.data.preprocess.config import RotationDirection
 from powerflow_pipeline.data.preprocess.geometry import rotate_intrinsics, rotated_size
-from powerflow_pipeline.data.preprocess.models import Intrinsics
+from powerflow_pipeline.data.preprocess.models import CaptureLayout, CaptureUnit, Intrinsics
 from powerflow_pipeline.data.preprocess.retilt import depth_intrinsics, rectifying_rotation
+from powerflow_pipeline.data.preprocess.tasks.discover import (
+    CAMERA_ROLES,
+    OPERATOR_METADATA,
+    discover_captures,
+)
 
 VALID_META: dict[str, Any] = {
     "scan_id": "scan_0001",
@@ -188,7 +193,13 @@ def _write_rgb(path: Path, frames: int, size: tuple[int, int], creation_time: st
 
 @pytest.fixture
 def make_camera() -> MakeCamera:
-    """Build one `<date>/<session>/<camera>` directory, with a knob per rejection rule."""
+    """Build one `<date>/<group>/<capture>` directory, with a knob per rejection rule.
+
+    Both raw layouts nest the streams three deep, so this builds either. What tells them
+    apart is where the operator `metadata.yaml` sits -- at the capture's parent for a
+    two-camera session, inside the capture for a single-camera trial -- which is
+    `make_session_metadata`'s `camera` knob, and the only thing discovery reads.
+    """
 
     def _make(
         raw_root: Path,
@@ -354,11 +365,12 @@ class MakeSessionMetadata(Protocol):
         *,
         date: str = ...,
         session: str = ...,
+        camera: str | None = ...,
         lift_start_ms: Any = ...,
         lift_end_ms: Any = ...,
         omit: Sequence[str] = ...,
         body: str | None = ...,
-        floor_regions: Literal["full_frame"] | dict[str, str] | None = ...,
+        floor_regions: Literal["full_frame", "full_frame_single"] | dict[str, str] | None = ...,
     ) -> Path: ...
 
 
@@ -370,6 +382,10 @@ def make_session_metadata() -> MakeSessionMetadata:
     non-numeric value or a negative one, swap `lift_start_ms`/`lift_end_ms`, or list a
     field in `omit` to drive one of the Cut stage's rejection cases; pass `body` to
     replace the file verbatim (e.g. malformed YAML).
+
+    Pass `camera` to write the file *inside* that capture instead of at its parent: that
+    is the single-camera layout, and the only thing that tells discovery the two apart.
+    `floor_regions="full_frame_single"` writes the matching unprefixed region keys.
     """
 
     def _make(
@@ -377,13 +393,16 @@ def make_session_metadata() -> MakeSessionMetadata:
         *,
         date: str = "9 July",
         session: str = "cnj_45kg_Set1",
+        camera: str | None = None,
         lift_start_ms: Any = 100,
         lift_end_ms: Any = 900,
         omit: Sequence[str] = (),
         body: str | None = None,
-        floor_regions: Literal["full_frame"] | dict[str, str] | None = None,
+        floor_regions: Literal["full_frame", "full_frame_single"] | dict[str, str] | None = None,
     ) -> Path:
-        session_dir = raw_root / date / session
+        session_dir = (
+            raw_root / date / session if camera is None else raw_root / date / session / camera
+        )
         session_dir.mkdir(parents=True, exist_ok=True)
         path = session_dir / "metadata.yaml"
 
@@ -404,6 +423,12 @@ def make_session_metadata() -> MakeSessionMetadata:
                 "  front_floor_region_top_right_in_pixels: (1, 0)",
                 "  side_floor_region_bottom_left_in_pixels: (0, 1)",
                 "  side_floor_region_top_right_in_pixels: (1, 0)",
+            ]
+        elif floor_regions == "full_frame_single":
+            lines += [
+                "video:",
+                "  floor_region_bottom_left_in_pixels: (0, 1)",
+                "  floor_region_top_right_in_pixels: (1, 0)",
             ]
         elif isinstance(floor_regions, dict):
             lines.append("video:")
@@ -481,3 +506,39 @@ def make_context() -> Callable[..., RunContext]:
         )
 
     return _make
+
+
+def sole_capture(raw_root: Path, camera: str | None = None) -> CaptureUnit:
+    """The one capture under `raw_root`, classified exactly as discovery would.
+
+    Unit tests for the stages *below* discovery build a camera and nothing else. Discovery
+    rejects a capture with no operator `metadata.yaml` -- there is no lift window to cut to
+    -- so this fills the identity in for them rather than making every such test author a
+    metadata file it will never read. A capture discovery does accept is returned verbatim,
+    so the two paths cannot drift.
+    """
+
+    found = discover_captures.fn(raw_root)
+    candidates = [
+        capture for capture in found.captures if camera is None or capture.relative.name == camera
+    ]
+    if candidates:
+        (capture,) = candidates
+        return capture
+
+    rejected = [
+        entry for entry in found.rejected if camera is None or Path(entry.scan_id).name == camera
+    ]
+    (entry,) = rejected
+    source = entry.source
+    relative = source.relative_to(raw_root)
+    metadata_path = source.parent / OPERATOR_METADATA
+    return CaptureUnit(
+        source=source,
+        relative=relative,
+        metadata_path=metadata_path,
+        metadata_relative=metadata_path.relative_to(raw_root),
+        group_id=str(relative.parent),
+        role=CAMERA_ROLES.get(source.name.strip().lower(), "front"),
+        layout=CaptureLayout.MULTI_CAMERA,
+    )

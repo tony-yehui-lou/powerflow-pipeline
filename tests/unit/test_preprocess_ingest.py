@@ -11,10 +11,9 @@ import pytest
 
 from powerflow_pipeline.data.common.errors import ScanRejected
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig
-from powerflow_pipeline.data.preprocess.models import CameraDir
-from powerflow_pipeline.data.preprocess.tasks.discover import discover_sessions
+from powerflow_pipeline.data.preprocess.models import CaptureUnit
 from powerflow_pipeline.data.preprocess.tasks.ingest import ingest_camera
-from tests.conftest import ODOMETRY_CX, ODOMETRY_CY, STATIC_FX, MakeCamera
+from tests.conftest import ODOMETRY_CX, ODOMETRY_CY, STATIC_FX, MakeCamera, sole_capture
 
 
 def make_config(tmp_path: Path, **overrides: Any) -> PreprocessConfig:
@@ -29,9 +28,8 @@ def make_config(tmp_path: Path, **overrides: Any) -> PreprocessConfig:
     )
 
 
-def only_camera(raw: Path) -> CameraDir:
-    (camera,) = discover_sessions.fn(raw)
-    return camera
+def only_camera(raw: Path) -> CaptureUnit:
+    return sole_capture(raw)
 
 
 def reason_for(tmp_path: Path, make_camera: MakeCamera, **camera_kwargs: Any) -> str:
@@ -230,7 +228,10 @@ def test_v11_stopwatch_not_attested(tmp_path: Path, make_camera: MakeCamera) -> 
     with pytest.raises(ScanRejected) as rejection:
         ingest_camera.fn(only_camera(raw), config, stopwatch_legible=None)
 
-    assert str(rejection.value) == "stopwatch not attested legible for camera Front"
+    assert (
+        str(rejection.value)
+        == "stopwatch not attested legible for capture 9 July/cnj_45kg_Set1/Front"
+    )
 
 
 def test_v11_passes_when_attested(tmp_path: Path, make_camera: MakeCamera) -> None:

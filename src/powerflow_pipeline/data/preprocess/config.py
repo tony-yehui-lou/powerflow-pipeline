@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from fnmatch import fnmatch
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -32,6 +33,12 @@ class PreprocessConfig(BaseModel):
     # call site. `preprocess()` skips the stage entirely when `pose_model` isn't given, so
     # this stays unset for every existing caller.
     pose_root: Path | None = None
+    # Restrict the run to capture ids matching this glob. A capture day is hours of
+    # re-encoding, and correcting a floor annotation means re-running one capture at a
+    # time; unset, every discovered capture is processed. A glob must keep a two-camera
+    # session whole -- excluding its `side` member leaves the group with no lift window to
+    # cut to, and the group is rejected exactly as it would be if the camera were missing.
+    only: str | None = None
     rotation: RotationDirection = RotationDirection.CW
     frame_count_tolerance: int = Field(default=1, ge=0)
     rgb_crf: int = Field(default=16, ge=0, le=51)
@@ -50,6 +57,15 @@ class PreprocessConfig(BaseModel):
     retilt_max_roll_deg: float = Field(default=45.0, gt=0)
     retilt_max_translation_m: float = Field(default=0.05, gt=0)
     retilt_conf2_area_fraction: float = Field(default=1 / 6, gt=0, le=1)
+    # Day-level plane agreement, warn-only. Both defaults sit outside the spread measured
+    # across 27 good captures of one static-rig day (1.6 deg, 0.07 m) and well inside the
+    # failure that motivated the check (44 deg, 0.4 m). Proposals pending a second day.
+    retilt_group_tilt_tolerance_deg: float = Field(default=3.0, gt=0)
+    retilt_group_height_tolerance_m: float = Field(default=0.10, gt=0)
+
+    # A lift window shorter than this warns; it never rejects. A snatch really can take
+    # under two seconds -- the shortest real windows observed are 1.64 s and 1.75 s.
+    cut_min_window_s: float = Field(default=1.0, gt=0)
 
     # S4 Crop tunables (docs/specs/preprocessing/6-cropping.md §Configuration).
     crop_max_residual_translation_m: float = Field(default=0.025, gt=0)
@@ -58,6 +74,11 @@ class PreprocessConfig(BaseModel):
     crop_max_crop_fraction: float = Field(default=0.25, gt=0, lt=1)
     crop_depth_sample_stride: int = Field(default=10, ge=1)
     crop_max_sampled_depth_frames: int = Field(default=32, ge=1)
+
+    def selects(self, capture_id: str) -> bool:
+        """Whether `--only` admits this capture. Unset admits everything."""
+
+        return self.only is None or fnmatch(capture_id, self.only)
 
     @property
     def stage_roots(self) -> tuple[Path, ...]:

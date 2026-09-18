@@ -203,9 +203,12 @@ HUMAN_SKELETON = Skeleton(
 # Normative source: "Human Body Model Data Storage v1" (docs/spec, GitHub issue #117).
 SKELETON_ID: Final = "human-v2"  # versioned: stored pose is only readable against its topology
 SKELETON_SCHEMA_VERSION: Final = "1.0.0"
-POSE_SCHEMA_VERSION: Final = "1.0.0"
+POSE_SCHEMA_VERSION: Final = "2.0.0"
 
-CameraName = Literal["Side", "Front"]
+# Which `metadata.yaml` fields a capture reads -- a lookup key, not a claim about where the
+# camera pointed. Replaces a `Literal["Side", "Front"]` camera name, which could not name a
+# capture in the single-camera layout at all (pydantic rejected it at runtime).
+CaptureRole = Literal["side", "front", "single"]
 PipelineStage = Literal["s0_ingest", "s1_cut", "s2_orient", "s3_retilt", "s4_crop"]
 
 PositionTriple = tuple[float, float, float]
@@ -288,13 +291,18 @@ class PoseDocument(BaseModel):
     `position[1]` is the joint's height above the floor, and the UI's `heightM` is a view of this
     rather than a separately stored number. The floor plane is fitted per camera, so two cameras
     of one session are not in a common frame until a fusion step exists.
+
+    `capture_id` is the raw-relative path of the capture these joints came from -- the only
+    identifier that names a capture under both raw layouts -- and `role` says which set of
+    operator annotations it was processed against.
     """
 
     model_config = _DOCUMENT_CONFIG
 
     schema_version: str = POSE_SCHEMA_VERSION
     skeleton_id: str = SKELETON_ID
-    camera: CameraName
+    capture_id: str
+    role: CaptureRole
     stage: PipelineStage  # whose image space pixel_position is drawn in
     frames: Frames
     joints: dict[JointId, JointSeries]

@@ -37,7 +37,8 @@ def _document(count: int = 2) -> PoseDocument:
     )
     joints: dict[JointId, JointSeries] = {joint: series for joint in HUMAN_SKELETON.joints}
     return PoseDocument(
-        camera="Side",
+        capture_id="11 July/30kg_Set1/Side",
+        role="side",
         stage="s4_crop",
         frames=Frames(
             count=count,

@@ -13,23 +13,26 @@ import pytest
 import yaml
 
 from powerflow_pipeline.data.common.errors import ScanRejected
-from powerflow_pipeline.data.preprocess.models import CameraRecord, CutInterval, Intrinsics
+from powerflow_pipeline.data.preprocess.models import (
+    CameraRecord,
+    CaptureLayout,
+    CutInterval,
+    Intrinsics,
+)
 from powerflow_pipeline.data.preprocess.tasks.cut import (
     cut_camera,
     read_lift_window,
     resolve_cut_interval,
 )
-from powerflow_pipeline.data.preprocess.tasks.discover import discover_sessions
 from powerflow_pipeline.data.preprocess.tasks.ingest import ingest_camera
-from tests.conftest import CREATION_TIME, MakeCamera
+from tests.conftest import CREATION_TIME, MakeCamera, sole_capture
 from tests.unit.test_preprocess_ingest import make_config
 
 CREATED_EPOCH_MS = 1783591455000  # creation_time_to_epoch_ms(CREATION_TIME)
 
 
 def only_camera(raw: Path) -> Any:
-    (camera,) = discover_sessions.fn(raw)
-    return camera
+    return sole_capture(raw)
 
 
 def build_record(
@@ -57,9 +60,12 @@ def bare_record(**overrides: Any) -> CameraRecord:
     """A minimal, file-free `CameraRecord` for testing checks that fire before any I/O."""
 
     defaults: dict[str, Any] = {
-        "date": "9 July",
-        "session": "cnj_45kg_Set1",
-        "camera": "Front",
+        "relative": Path("9 July/cnj_45kg_Set1/Front"),
+        "metadata_path": Path("/nonexistent/metadata.yaml"),
+        "metadata_relative": Path("9 July/cnj_45kg_Set1/metadata.yaml"),
+        "group_id": "9 July/cnj_45kg_Set1",
+        "role": "front",
+        "layout": CaptureLayout.MULTI_CAMERA,
         "source": Path("/nonexistent"),
         "rgb_width": 64,
         "rgb_height": 48,
@@ -85,7 +91,9 @@ def test_missing_creation_time_is_rejected(tmp_path: Path) -> None:
     record = bare_record(creation_time=None)
     interval = make_interval(start_ms=CREATED_EPOCH_MS, end_ms=CREATED_EPOCH_MS + 100)
 
-    with pytest.raises(ScanRejected, match="rgb creation time missing for camera Front"):
+    with pytest.raises(
+        ScanRejected, match="rgb creation time missing for camera 9 July/cnj_45kg_Set1/Front"
+    ):
         cut_camera.fn(record, interval, make_config(tmp_path))
 
 
@@ -105,7 +113,9 @@ def test_no_rgb_frames_in_interval_is_rejected(tmp_path: Path, make_camera: Make
     # Odometry/depth index 8 lands at 133ms, but RGB ends at index 7.
     interval = make_interval(start_ms=CREATED_EPOCH_MS + 133, end_ms=CREATED_EPOCH_MS + 133)
 
-    with pytest.raises(ScanRejected, match="no rgb frames in cut interval for camera Front"):
+    with pytest.raises(
+        ScanRejected, match="no rgb frames in cut interval for camera 9 July/cnj_45kg_Set1/Front"
+    ):
         cut_camera.fn(record, interval, make_config(tmp_path))
 
 
@@ -323,7 +333,9 @@ def test_resolve_cut_interval_derives_the_shared_bounds(
     make_session_metadata(raw, lift_start_ms=100, lift_end_ms=900)
     side_record = ingest_camera.fn(only_camera(raw), make_config(tmp_path))
 
-    interval = resolve_cut_interval.fn(raw, "9 July", "cnj_45kg_Set1", side_record)
+    interval = resolve_cut_interval.fn(
+        raw / "9 July" / "cnj_45kg_Set1" / "metadata.yaml", side_record
+    )
 
     assert interval.cut_start_epoch_ms == CREATED_EPOCH_MS + 100
     assert interval.cut_end_epoch_ms == CREATED_EPOCH_MS + 900
@@ -341,7 +353,7 @@ def test_resolve_cut_interval_rejects_side_creation_time_missing(tmp_path: Path)
     side_record = bare_record(creation_time=None)
 
     with pytest.raises(ScanRejected, match="rgb creation time missing"):
-        resolve_cut_interval.fn(raw, "9 July", "cnj_45kg_Set1", side_record)
+        resolve_cut_interval.fn(raw / "9 July" / "cnj_45kg_Set1" / "metadata.yaml", side_record)
 
 
 def test_resolve_cut_interval_rejects_interval_outside_capture(
@@ -353,4 +365,33 @@ def test_resolve_cut_interval_rejects_interval_outside_capture(
     side_record = ingest_camera.fn(only_camera(raw), make_config(tmp_path))
 
     with pytest.raises(ScanRejected, match="cut interval outside side capture"):
-        resolve_cut_interval.fn(raw, "9 July", "cnj_45kg_Set1", side_record)
+        resolve_cut_interval.fn(raw / "9 July" / "cnj_45kg_Set1" / "metadata.yaml", side_record)
+
+
+# --- cut_min_window_s --------------------------------------------------------------------
+
+
+def test_a_short_lift_window_warns_and_still_publishes(
+    tmp_path: Path, make_camera: MakeCamera
+) -> None:
+    """A snatch really can take under two seconds; the shortest real windows are 1.64 s."""
+
+    record = build_record(tmp_path, make_camera, camera="Side", rgb_frames=5, depth_frames=6)
+    interval = make_interval(start_ms=CREATED_EPOCH_MS, end_ms=CREATED_EPOCH_MS + 500)
+    config = make_config(tmp_path, dry_run=True, cut_min_window_s=1.0)
+
+    _, step = cut_camera.fn(record, interval, config)
+
+    (warning,) = step.warnings
+    assert "lift window is 0.50 s" in warning
+    assert "cut_min_window_s=1.0" in warning
+
+
+def test_a_normal_lift_window_warns_about_nothing(tmp_path: Path, make_camera: MakeCamera) -> None:
+    record = build_record(tmp_path, make_camera, camera="Side", rgb_frames=5, depth_frames=6)
+    interval = make_interval(start_ms=CREATED_EPOCH_MS, end_ms=CREATED_EPOCH_MS + 2_000)
+    config = make_config(tmp_path, dry_run=True, cut_min_window_s=1.0)
+
+    _, step = cut_camera.fn(record, interval, config)
+
+    assert step.warnings == []

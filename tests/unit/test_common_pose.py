@@ -45,7 +45,8 @@ def _joints(count: int = 3) -> dict[JointId, JointSeries]:
 
 def _document(count: int = 3) -> PoseDocument:
     return PoseDocument(
-        camera="Side",
+        capture_id="11 July/30kg_Set1/Side",
+        role="side",
         stage="s4_crop",
         frames=_frames(count),
         joints=_joints(count),
@@ -130,20 +131,33 @@ def test_pose_document_requires_every_skeleton_joint() -> None:
     joints = _joints()
     del joints["head"]
     with pytest.raises(ValidationError):
-        PoseDocument(camera="Side", stage="s4_crop", frames=_frames(), joints=joints)
+        PoseDocument(
+            capture_id="11 July/30kg_Set1/Side",
+            role="side",
+            stage="s4_crop",
+            frames=_frames(),
+            joints=joints,
+        )
 
 
 def test_pose_document_rejects_a_series_that_disagrees_with_the_frame_count() -> None:
     joints = _joints()
     joints["leftKnee"] = _series(2)
     with pytest.raises(ValidationError):
-        PoseDocument(camera="Side", stage="s4_crop", frames=_frames(3), joints=joints)
+        PoseDocument(
+            capture_id="11 July/30kg_Set1/Side",
+            role="side",
+            stage="s4_crop",
+            frames=_frames(3),
+            joints=joints,
+        )
 
 
 def test_pose_document_rejects_an_unknown_pipeline_stage() -> None:
     with pytest.raises(ValidationError):
         PoseDocument(
-            camera="Side",
+            capture_id="11 July/30kg_Set1/Side",
+            role="side",
             stage="s9_invent",  # type: ignore[arg-type]
             frames=_frames(),
             joints=_joints(),
@@ -194,3 +208,21 @@ def test_skeleton_document_lists_each_bone_as_a_pair_of_joint_names() -> None:
     payload = skeleton_document()
     assert payload["bones"][0] == ["leftAnkle", "leftKnee"]
     assert len(payload["bones"]) == len(HUMAN_SKELETON.bones)
+
+
+def test_pose_document_names_a_single_camera_capture() -> None:
+    """A `Literal["Side", "Front"]` camera name could not name one at all."""
+
+    joints = {joint: _series() for joint in HUMAN_SKELETON.joints}
+
+    document = PoseDocument(
+        capture_id="22 August/Snch/110kgSnch1",
+        role="single",
+        stage="s4_crop",
+        frames=_frames(),
+        joints=joints,
+    )
+
+    assert document.capture_id == "22 August/Snch/110kgSnch1"
+    assert document.role == "single"
+    assert document.to_document()["captureId"] == "22 August/Snch/110kgSnch1"

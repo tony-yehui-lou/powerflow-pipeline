@@ -10,20 +10,32 @@ Add a **Cut** stage between Ingest and Orientation:
 S0 Ingest → S1 Cut → S2 Orient
 ```
 
-The stage uses the Side camera's lift window as the source of truth, converts that window to
-real-world epoch time, and applies the same epoch window to both the Side and Front captures. Its
-output is two camera directories that cover the same lift interval.
+The stage uses the **interval owner's** lift window as the source of truth, converts that window
+to real-world epoch time, and applies the same epoch window to every capture in the group. The
+owner is chosen by **role**, never by a literal directory name:
+
+- a two-camera session is cut to its `side` camera's window, and the group is rejected whole if
+  it has no `side` member;
+- a single-camera capture is its own owner, and its own group.
+
+Its output is one directory per capture, all covering the same lift interval.
 
 ## Metadata contract
 
-`metadata.yaml` contains the Side-camera lift window:
+The capture's governing `metadata.yaml` -- resolved once by discovery, at the session level or
+inside the capture depending on the layout -- contains the lift window:
 
 ```yaml
 lift_start_time_side_in_ms: <milliseconds>
 lift_end_time_side_in_ms: <milliseconds>
 ```
 
-These fields are interpreted as millisecond offsets from the creation time of the Side `rgb.mp4`.
+These fields are interpreted as millisecond offsets from the creation time of the owner's
+`rgb.mp4`. The `..._side_in_ms` names are **identifiers, not assertions about a camera**: a
+single-camera capture spells them exactly the same way, as every real capture of that shape does.
+A window shorter than `cut_min_window_s` raises a manifest warning and is never rejected -- a
+snatch really can take under two seconds.
+
 The fields must satisfy:
 
 ```text

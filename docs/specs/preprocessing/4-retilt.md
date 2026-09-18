@@ -59,10 +59,26 @@ geometric assumption (S4 common framing) with no visible symptom in the frame it
 
 ## 1. Floor-region selection
 
-The selection region is **operator-annotated per camera**, not inferred. Both cameras of a
-session share one `metadata.yaml` — the same file S1 Cut reads for the lift window, at
-`<date>/<session>/metadata.yaml` — so the region fields are **prefixed by view** (`front_`
-or `side_`) to tell them apart, under a `video:` block:
+The selection region is **operator-annotated per capture**, not inferred. Which fields to
+read is decided by the capture's **role**, resolved once by discovery along with the path of
+the `metadata.yaml` that governs it — the same file S1 Cut reads for the lift window.
+
+| role | keys read from the `video:` block |
+|---|---|
+| `front` | `front_floor_region_bottom_left_in_pixels`, `front_floor_region_top_right_in_pixels` |
+| `side` | `side_floor_region_*` |
+| `single` | **unprefixed** `floor_region_*`, accepting the `side_`-prefixed spelling as an alias |
+
+The `side_` alias exists because a single-camera capture's lift window is already spelled
+`..._side_in_ms`; whichever the operator types works. There is **no `front_` alias for
+`single`**, and `FloorRegion` does **not** swap an inverted `y` pair: real captures of that
+shape pair a `front_`-prefixed bottom-left with an unprefixed top-right *and* invert `y`, and
+both are authoring mistakes rather than alternate spellings. Accepting either would wave
+through a rectangle nobody finished checking — on the real data, one that sat on a PA speaker
+cabinet rather than the floor. The rejection names the exact field that was missing.
+
+Two cameras of a session share one `metadata.yaml` at `<date>/<session>/metadata.yaml`, so
+their region fields are **prefixed by view** to tell them apart, under a `video:` block:
 
 ```yaml
 video:
@@ -72,8 +88,8 @@ video:
   side_floor_region_top_right_in_pixels: (x1, y1)
 ```
 
-Retilt reads the pair matching **this camera's own** `Front`/`Side` role — a plain lookup
-key into the shared file, not a geometric rule: nothing about the rectangle itself is
+Retilt reads the pair matching **this capture's own** role — a plain lookup key into the
+governing file, not a geometric rule: nothing about the rectangle itself is
 derived from the camera's name, only which of the four fields to read.
 
 Coordinates are normalized to `[0, 1]` in **standard image convention**: `x` left→right,
@@ -283,10 +299,30 @@ cross-camera dependency) when:
 - odometry shows the camera translated beyond `retilt_max_translation_m` (proposed default
   **0.05 m**) across the sampled frames — this breaks the static-camera, one-plane-per-camera
   assumption the whole stage rests on;
-- the session's `metadata.yaml` is missing this camera's view-prefixed floor-region fields,
+- the governing `metadata.yaml` is missing this capture's role-appropriate floor-region fields,
   fails to parse as `"(x, y)"` (§1), or the parsed region is degenerate (`x0 >= x1` **or**
   `y1 >= y0` — note `y1 < y0` is the *valid* case under §1's top→bottom, bottom-left/
   top-right naming, since `bottom_left.y` is numerically larger) or outside `[0, 1]` bounds.
+
+**The capture day's fits must agree with each other — warn-only.** For a `SINGLE_CAMERA`
+group, one unmoved tripod shot every capture of the day, so their fitted planes should
+match. The per-capture gates above measure how *tightly* points fit a plane, never whether
+that plane is the floor: on real data a rectangle that caught a spectator's head produced a
+0.85 cm RMS at −44.9° of tilt, sliding under the 45° gate by a tenth of a degree. After every
+capture of a `<date>/` is fitted, the run compares each against the day's **median** tilt,
+roll and camera height (a median, not a mean, so a minority of wrong fits cannot drag the
+reference toward themselves and exonerate one), and raises a manifest warning past
+`retilt_group_tilt_tolerance_deg` (proposed **3°**) or `retilt_group_height_tolerance_m`
+(proposed **0.10 m**). Both defaults sit outside the spread measured across 27 good captures
+of one real day (1.6° and 0.07 m) and well inside the failure above.
+
+It is **warn-only** for the same reason the gravity check is: it assumes a rig that never
+moved, and wants calibrating against a second single-camera day before it fails a run. It is
+skipped for a two-camera session, whose cameras are *supposed* to disagree, and for a day
+with fewer than three captures, where the median is not a reference worth comparing against.
+The medians and each capture's deviation are recorded in the **run manifest** rather than in
+`retilt_sidecar.json`: the median is not knowable when that sidecar is written, and rewriting
+a published sidecar afterwards would break the staging-then-publish rule every stage follows.
 
 **The odometry-gravity check is warn-only, not a rejection, until calibrated.** The fitted
 normal disagreeing with the **odometry gravity vector** by more than

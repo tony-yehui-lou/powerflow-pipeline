@@ -10,11 +10,10 @@ from powerflow_pipeline.data.common.errors import ScanRejected
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig
 from powerflow_pipeline.data.preprocess.models import CameraRecord
 from powerflow_pipeline.data.preprocess.tasks.cut import cut_camera, resolve_cut_interval
-from powerflow_pipeline.data.preprocess.tasks.discover import discover_sessions
 from powerflow_pipeline.data.preprocess.tasks.ingest import ingest_camera
 from powerflow_pipeline.data.preprocess.tasks.orient import orient_camera
 from powerflow_pipeline.data.preprocess.tasks.retilt import retilt_camera
-from tests.conftest import MakeCamera, MakeSessionMetadata
+from tests.conftest import MakeCamera, MakeSessionMetadata, sole_capture
 from tests.unit.test_preprocess_ingest import make_config as _base_make_config
 
 
@@ -27,9 +26,9 @@ def _build_orient_record(
 ) -> CameraRecord:
     """Run S0 -> S1 -> S2 on the one synthetic camera named `camera`; return S2's record."""
 
-    (camera_dir,) = [c for c in discover_sessions.fn(raw_root) if c.camera == camera]
+    camera_dir = sole_capture(raw_root, camera)
     ingested = ingest_camera.fn(camera_dir, config)
-    interval = resolve_cut_interval.fn(raw_root, camera_dir.date, camera_dir.session, ingested)
+    interval = resolve_cut_interval.fn(camera_dir.metadata_path, ingested)
     cut_record, _ = cut_camera.fn(ingested, interval, config)
     orient_record, _ = orient_camera.fn(cut_record, config)
     return orient_record
@@ -78,7 +77,7 @@ def test_retilt_camera_recovers_baked_in_tilt(
     config = make_config(tmp_path, retilt_min_floor_points=10)
     orient_record = _build_orient_record(raw, config)
 
-    retilt_record, step = retilt_camera.fn(orient_record, raw, config)
+    retilt_record, step = retilt_camera.fn(orient_record, config)
 
     assert step.derived["tilt_deg"] == pytest.approx(8.0, abs=0.5)
     assert step.derived["roll_deg"] == pytest.approx(-2.0, abs=0.5)
@@ -100,7 +99,7 @@ def test_retilt_camera_publishes_expected_files(
     config = make_config(tmp_path, retilt_min_floor_points=10)
     orient_record = _build_orient_record(raw, config)
 
-    retilt_camera.fn(orient_record, raw, config)
+    retilt_camera.fn(orient_record, config)
 
     published = config.retilt_root / "9 July" / "cnj_45kg_Set1" / "Side"
     assert {path.name for path in published.iterdir()} == {
@@ -132,7 +131,7 @@ def test_retilt_sidecar_has_the_required_fields(
     config = make_config(tmp_path, retilt_min_floor_points=10)
     orient_record = _build_orient_record(raw, config)
 
-    retilt_camera.fn(orient_record, raw, config)
+    retilt_camera.fn(orient_record, config)
 
     sidecar = json.loads(
         (
@@ -180,7 +179,7 @@ def test_camera_matrix_is_unchanged(
     config = make_config(tmp_path, retilt_min_floor_points=10)
     orient_record = _build_orient_record(raw, config)
 
-    retilt_camera.fn(orient_record, raw, config)
+    retilt_camera.fn(orient_record, config)
 
     published = config.retilt_root / "9 July" / "cnj_45kg_Set1" / "Side"
     assert (published / "camera_matrix.csv").read_bytes() == (
@@ -205,7 +204,7 @@ def test_gravity_disagreement_warns_but_does_not_reject(
     config = make_config(tmp_path, retilt_min_floor_points=10)
     orient_record = _build_orient_record(raw, config)
 
-    _, step = retilt_camera.fn(orient_record, raw, config)
+    _, step = retilt_camera.fn(orient_record, config)
 
     assert any("gravity disagreement" in warning for warning in step.warnings)
 
@@ -224,7 +223,7 @@ def test_gravity_agreement_within_tolerance_does_not_warn(
     config = make_config(tmp_path, retilt_min_floor_points=10, retilt_gravity_tolerance_deg=179.0)
     orient_record = _build_orient_record(raw, config)
 
-    _, step = retilt_camera.fn(orient_record, raw, config)
+    _, step = retilt_camera.fn(orient_record, config)
 
     assert not any("gravity disagreement" in warning for warning in step.warnings)
 
@@ -240,7 +239,7 @@ def test_missing_floor_region_is_rejected(
     orient_record = _build_orient_record(raw, config)
 
     with pytest.raises(ScanRejected):
-        retilt_camera.fn(orient_record, raw, config)
+        retilt_camera.fn(orient_record, config)
 
 
 def test_unparseable_floor_region_is_rejected(
@@ -259,7 +258,7 @@ def test_unparseable_floor_region_is_rejected(
     orient_record = _build_orient_record(raw, config)
 
     with pytest.raises(ScanRejected):
-        retilt_camera.fn(orient_record, raw, config)
+        retilt_camera.fn(orient_record, config)
 
 
 def test_degenerate_floor_region_is_rejected(
@@ -278,7 +277,7 @@ def test_degenerate_floor_region_is_rejected(
     orient_record = _build_orient_record(raw, config)
 
     with pytest.raises(ScanRejected):
-        retilt_camera.fn(orient_record, raw, config)
+        retilt_camera.fn(orient_record, config)
 
 
 def test_too_few_floor_points_is_rejected(
@@ -296,7 +295,36 @@ def test_too_few_floor_points_is_rejected(
     orient_record = _build_orient_record(raw, config)
 
     with pytest.raises(ScanRejected, match="floor points"):
-        retilt_camera.fn(orient_record, raw, config)
+        retilt_camera.fn(orient_record, config)
+
+
+def test_a_plane_that_is_not_flat_enough_is_rejected(
+    tmp_path: Path, make_camera: MakeCamera, make_session_metadata: MakeSessionMetadata
+) -> None:
+    """The gate that caught a real region sitting on a PA speaker rather than the floor.
+
+    On the real data that rectangle fitted at 7-10 cm RMS against a 2 cm ceiling. A fit can
+    be geometrically clean and still be of the wrong surface, so this is the one check that
+    makes a wrong rectangle loud instead of silent -- see 4-retilt.md §7.
+    """
+
+    raw = _make_floor_session(
+        tmp_path,
+        make_camera,
+        make_session_metadata,
+        floor_tilt_deg=8.0,
+        floor_roll_deg=-2.0,
+        floor_distance_m=1.8,
+    )
+    config = make_config(
+        tmp_path,
+        retilt_min_floor_points=10,  # the fixture's frames are tiny
+        retilt_max_plane_rms_m=1e-9,  # nothing real is this flat
+    )
+    orient_record = _build_orient_record(raw, config)
+
+    with pytest.raises(ScanRejected, match="plane fit RMS"):
+        retilt_camera.fn(orient_record, config)
 
 
 def _perturb_odometry_x(path: Path, row_index: int, x: float) -> None:
@@ -332,7 +360,7 @@ def test_translation_beyond_tolerance_is_rejected(
     _perturb_odometry_x(orient_record.source / "odometry.csv", orient_record.n_frames - 1, 5.0)
 
     with pytest.raises(ScanRejected, match="translated"):
-        retilt_camera.fn(orient_record, raw, config)
+        retilt_camera.fn(orient_record, config)
 
 
 def test_tilt_beyond_bound_is_rejected(
@@ -350,7 +378,7 @@ def test_tilt_beyond_bound_is_rejected(
     orient_record = _build_orient_record(raw, config)
 
     with pytest.raises(ScanRejected, match="tilt"):
-        retilt_camera.fn(orient_record, raw, config)
+        retilt_camera.fn(orient_record, config)
 
 
 # --- a dry run touches nothing ----------------------------------------------------------
@@ -376,7 +404,7 @@ def test_a_dry_run_publishes_nothing(
     orient_record = _build_orient_record(raw, config)
 
     dry_config = config.model_copy(update={"dry_run": True})
-    retilt_record, step = retilt_camera.fn(orient_record, raw, dry_config)
+    retilt_record, step = retilt_camera.fn(orient_record, dry_config)
 
     assert not config.retilt_root.exists()
     assert step.file_ops

@@ -21,8 +21,8 @@ from powerflow_pipeline.data.common.filesystem import write_json
 from powerflow_pipeline.data.common.task_logging import log_task_paths
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig
 from powerflow_pipeline.data.preprocess.models import (
-    CameraDir,
     CameraRecord,
+    CaptureUnit,
     Intrinsics,
     StreamCounts,
 )
@@ -193,9 +193,9 @@ def _check_image_streams(depth: list[Path], confidence: list[Path]) -> tuple[np.
 
 @task(retries=1)
 def ingest_camera(
-    camera: CameraDir, config: PreprocessConfig, stopwatch_legible: bool | None = None
+    camera: CaptureUnit, config: PreprocessConfig, stopwatch_legible: bool | None = None
 ) -> CameraRecord:
-    """Validate one camera and emit its `record.json`. Raises `ScanRejected` on any failure."""
+    """Validate one capture and emit its `record.json`. Raises `ScanRejected` on any failure."""
 
     source = camera.source
     log_task_paths(source, config.record_root / camera.relative / "record.json")
@@ -221,12 +221,15 @@ def ingest_camera(
         )
 
     if config.require_stopwatch_attestation and stopwatch_legible is not True:
-        raise ScanRejected(f"stopwatch not attested legible for camera {camera.camera}")
+        raise ScanRejected(f"stopwatch not attested legible for capture {camera.capture_id}")
 
     record = CameraRecord(
-        date=camera.date,
-        session=camera.session,
-        camera=camera.camera,
+        relative=camera.relative,
+        metadata_path=camera.metadata_path,
+        metadata_relative=camera.metadata_relative,
+        group_id=camera.group_id,
+        role=camera.role,
+        layout=camera.layout,
         source=source,
         rgb_width=rgb.width,
         rgb_height=rgb.height,

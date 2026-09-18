@@ -11,13 +11,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Final, cast
+from typing import Final
 
 import av
 from prefect import task
 
 from powerflow_pipeline.data.common.models import (
-    CameraName,
     FileOp,
     Frames,
     PipelineStage,
@@ -63,12 +62,25 @@ def _capture_start_epoch_ms(config: PreprocessConfig, record: CameraRecord) -> i
     reaches back to S1's own output tree rather than something copied down the pipeline.
     """
 
-    sidecar_path = (
-        config.cut_root / record.date / record.session / record.camera / "cut_sidecar.json"
-    )
+    sidecar_path = config.cut_root / record.relative / "cut_sidecar.json"
     sidecar = json.loads(sidecar_path.read_text())
     start_ms: int = sidecar["retained"]["rgb"]["epoch_range"][0]
     return start_ms
+
+
+def _floor_offset_m(config: PreprocessConfig, record: CameraRecord) -> float:
+    """This camera's floor height above the optical centre, from S3's own sidecar.
+
+    `PlaneFit.floor_offset_m` is invariant under S3's rectifying rotation (a distance from the
+    origin doesn't change when the axes about that origin are rotated), so it's read straight
+    off S3's pre-rectification fit rather than recomputed here -- S5 has no floor region or
+    depth-selection logic of its own, only 4-retilt.md's.
+    """
+
+    sidecar_path = config.retilt_root / record.relative / "retilt_sidecar.json"
+    sidecar = json.loads(sidecar_path.read_text())
+    offset: float = sidecar["floor_offset_m"]
+    return offset
 
 
 @task(retries=1)
@@ -83,7 +95,7 @@ def detect_pose_camera(
 
     assert config.pose_root is not None  # the caller checks this before looping cameras
     source = record.source
-    destination = pose_path(config.pose_root, Path(record.date) / record.session, record.camera)
+    destination = pose_path(config.pose_root, record.relative.parent, record.relative.name)
     log_task_paths(source, destination)
 
     file_ops = [
@@ -93,7 +105,16 @@ def detect_pose_camera(
     if config.dry_run:
         return record, StepResult(file_ops=file_ops)
 
-    joints = model.predict(rgb_path=source / "rgb.mp4", n_frames=record.n_frames)
+    joints = model.predict(
+        rgb_path=source / "rgb.mp4",
+        n_frames=record.n_frames,
+        depth_dir=source / "depth",
+        confidence_dir=source / "confidence",
+        intrinsics=record.intrinsics,
+        rgb_size=(record.rgb_width, record.rgb_height),
+        depth_size=(record.depth_width, record.depth_height),
+        floor_offset_m=_floor_offset_m(config, record),
+    )
     frames = Frames(
         count=record.n_frames,
         fps=record.fps,
@@ -101,7 +122,8 @@ def detect_pose_camera(
         t_ms=tuple(_frame_offsets_ms(source / "rgb.mp4")),
     )
     document = PoseDocument(
-        camera=cast(CameraName, record.camera),
+        capture_id=record.capture_id,
+        role=record.role,
         stage=POSE_SOURCE_STAGE,
         frames=frames,
         joints=joints,

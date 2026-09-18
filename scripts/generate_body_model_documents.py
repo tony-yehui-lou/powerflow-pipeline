@@ -77,7 +77,8 @@ def _example_pose() -> PoseDocument:
             confidence=tuple(confidence),
         )
     return PoseDocument(
-        camera="Side",
+        capture_id="11 July/30kg_Set1/Side",
+        role="side",
         stage="s4_crop",
         frames=Frames(count=3, fps=60.0, start_epoch_ms=1783749250270, t_ms=(0, 17, 33)),
         joints=joints,

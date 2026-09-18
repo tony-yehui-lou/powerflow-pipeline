@@ -8,7 +8,10 @@ from typing import Annotated
 import typer
 
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig, RotationDirection
+from powerflow_pipeline.data.preprocess.depth_pose_model import DepthBackedPoseModel
 from powerflow_pipeline.data.preprocess.flow import preprocess as preprocess_flow
+from powerflow_pipeline.data.preprocess.mediapipe_pose_detector import MediaPipePoseDetector
+from powerflow_pipeline.data.preprocess.pose_model import PoseModel
 
 app = typer.Typer(help="PowerFlow data pipelines.", no_args_is_help=True)
 
@@ -39,6 +42,24 @@ def preprocess(
     crop_root: Annotated[
         Path, typer.Option("--crop", help="Where S4 publishes the cropped streams.")
     ],
+    pose_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--pose",
+            help="Where S5 publishes detected poses. Omit to skip S5 entirely.",
+        ),
+    ] = None,
+    only: Annotated[
+        str | None,
+        typer.Option(
+            "--only",
+            help=(
+                "Process only captures whose id matches this glob, e.g. '22 August/Snch/*'. "
+                "Must keep a two-camera session whole: excluding its Side camera leaves the "
+                "group with no lift window to cut to, and it is rejected."
+            ),
+        ),
+    ] = None,
     rotation: Annotated[
         RotationDirection,
         typer.Option("--rotation", help="Direction that makes the lifter upright."),
@@ -51,7 +72,12 @@ def preprocess(
     ] = False,
 ) -> None:
     """Ingest a raw capture (S0), cut it to the lift window (S1), rotate it (S2),
-    retilt it level with the floor (S3), and crop it to a stable common region (S4).
+    retilt it level with the floor (S3), crop it to a stable common region (S4), and,
+    when `--pose` is given, detect joints (S5).
+
+    Both raw layouts are handled by one invocation: the directory shape is detected per
+    capture from where its operator `metadata.yaml` sits, so there is no layout flag to
+    get wrong. Output mirrors the raw path exactly, at whatever depth that is.
 
     There is no `--in-place` mode: it would rewrite the raw capture, and raw data is
     write-once. Each stage publishes to its own output root instead.
@@ -64,11 +90,19 @@ def preprocess(
         retilt_root=retilt_root,
         crop_root=crop_root,
         output_root=output_root,
+        pose_root=pose_root,
+        only=only,
         rotation=rotation,
         dry_run=dry_run,
         overwrite=overwrite,
     )
-    manifest = preprocess_flow(config)
+    # `MediaPipePoseDetector()` loads (downloading on first use) the pretrained model
+    # bundle, so it's only constructed when S5 is actually requested.
+    pose_model: PoseModel | None = None
+    if pose_root is not None:
+        pose_model = DepthBackedPoseModel(MediaPipePoseDetector())
+
+    manifest = preprocess_flow(config, pose_model=pose_model)
     typer.echo(
         f"processed {len(manifest.scans)} camera(s), rejected {len(manifest.rejected_scans)}"
     )

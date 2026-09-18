@@ -88,6 +88,22 @@ is more accurate because it uses a real sensor measurement instead of a learned 
 
 **Recommendation: use depth-based back-projection for metric 3D, not a monocular estimator.**
 
+## Document identity
+
+`PoseDocument` names its capture with **`capture_id`** (the raw-relative path, e.g.
+`11 July/30kg_Set1/Side` or `22 August/Snch/110kgSnch1`) plus **`role`** (`side` / `front` /
+`single`). It previously carried `camera: Literal["Side", "Front"]`, which no single-camera
+capture can satisfy — pydantic rejected the document outright at runtime, so the stage could
+not publish at all for that layout. `pose_storage.pose_path` already took the capture path
+whole and needed no change. `POSE_SCHEMA_VERSION` is `2.0.0`, and
+`powerflow-ui/docs/schema-normalized/pose.schema.json` carries the matching required fields.
+
+Positions remain in the floor-anchored frame described by `PoseDocument`: `position[1]` is
+height above the floor and is sound for every capture, while the horizontal axes are the
+camera's own — S3 removes tilt and roll but never yaw. An obliquely-placed camera therefore
+yields horizontal components that are not anatomical, and reading them as sagittal bar
+displacement is wrong by an unrecorded factor.
+
 ## Gaps / Custom-Build Items
 
 - **`PoseModel.predict` interface extension** — the current signature (`predict(rgb_path, n_frames) -> dict[JointId, JointSeries]`) only exposes the RGB video. To support depth back-projection it needs access to this camera's `depth/` directory, `confidence/` directory, and `camera_matrix.csv` (all already written to the same S4 output directory `tasks/pose.py`'s `record.source` points at), plus the floor-height offset from `retilt_sidecar.json` (or an equivalent value threaded down from S3). This is a scoped signature change to the `Protocol` and its one caller in `tasks/pose.py`, not a new pipeline stage.
@@ -96,6 +112,15 @@ is more accurate because it uses a real sensor measurement instead of a learned 
 
 ## Risks & Open Questions
 
+- **Subject selection with spectators in frame** — `MediaPipePoseDetector` runs with
+  `num_poses=1`, so the detector returns one pose and the caller cannot tell whether it is the
+  athlete. On real frames from a single-camera gym capture, `num_poses=5` found 4-5 candidate
+  poses; on a two-camera July frame it found 2, and `num_poses=1` picked a **bystander** on one
+  of the three frames sampled (bbox height 0.08 against the athlete's 0.15). This is a
+  pre-existing defect that the busier single-camera scene amplifies, not a new one, and it is
+  tracked separately. Until it is fixed, single-camera pose output is not accepted on
+  gate-passing alone: render the detected skeleton over the source video and confirm by eye
+  that the tracked person is the lifter.
 - **New dependency approval** — per `powerflow-pipeline/CLAUDE.md`, adding `mmpose`/`mmcv` (for RTMPose) or `mediapipe` is a new dependency and should be explicitly approved before landing, not silently added.
 - **Floor-height provenance** — this doc assumes the per-camera floor height above the optical centre (needed to convert back-projected camera-frame Y into floor-frame Y) is either already in `retilt_sidecar.json` or trivially derivable from the fitted plane's constant term; this should be confirmed against the actual sidecar schema before implementation (`4-retilt.md` §6 lists sidecar fields but doesn't explicitly name a "camera height" field — it may need to be added or recomputed from `floor_normal_cam`/plane fit at Retilt time).
 - **Accuracy validation** — no numeric validation yet exists for either candidate 2D detector against real PowerFlow lift footage (barbell occlusion, fast bar-path frames, non-frontal limb angles at lockout). A short calibration spike against a handful of real sessions, comparing RTMPose and MediaPipe Pose output against manually-annotated frames, is recommended before committing to one over the other for production.

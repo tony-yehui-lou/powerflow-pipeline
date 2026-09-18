@@ -13,10 +13,9 @@ from powerflow_pipeline.data.common.errors import PublishError
 from powerflow_pipeline.data.common.models import HUMAN_SKELETON, JointId, JointSeries
 from powerflow_pipeline.data.common.pose_storage import pose_path, read_pose
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig
-from powerflow_pipeline.data.preprocess.models import CameraRecord
+from powerflow_pipeline.data.preprocess.models import CameraRecord, Intrinsics
 from powerflow_pipeline.data.preprocess.tasks.crop import crop_camera
 from powerflow_pipeline.data.preprocess.tasks.cut import cut_camera, resolve_cut_interval
-from powerflow_pipeline.data.preprocess.tasks.discover import discover_sessions
 from powerflow_pipeline.data.preprocess.tasks.ingest import ingest_camera
 from powerflow_pipeline.data.preprocess.tasks.orient import orient_camera
 from powerflow_pipeline.data.preprocess.tasks.pose import (
@@ -24,7 +23,7 @@ from powerflow_pipeline.data.preprocess.tasks.pose import (
     ensure_skeleton_published,
 )
 from powerflow_pipeline.data.preprocess.tasks.retilt import retilt_camera
-from tests.conftest import MakeCamera, MakeSessionMetadata
+from tests.conftest import MakeCamera, MakeSessionMetadata, sole_capture
 from tests.unit.test_preprocess_ingest import make_config as _base_make_config
 
 
@@ -41,7 +40,18 @@ class _StubModel:
     def __init__(self) -> None:
         self.calls: list[tuple[Path, int]] = []
 
-    def predict(self, rgb_path: Path, n_frames: int) -> dict[JointId, JointSeries]:
+    def predict(
+        self,
+        rgb_path: Path,
+        n_frames: int,
+        *,
+        depth_dir: Path,
+        confidence_dir: Path,
+        intrinsics: Intrinsics,
+        rgb_size: tuple[int, int],
+        depth_size: tuple[int, int],
+        floor_offset_m: float,
+    ) -> dict[JointId, JointSeries]:
         self.calls.append((rgb_path, n_frames))
         series = JointSeries(
             position=tuple((0.0, 0.0, 0.0) for _ in range(n_frames)),
@@ -74,12 +84,12 @@ def _build_crop_record(
 ) -> CameraRecord:
     """Run S0 -> S1 -> S2 -> S3 -> S4 on the one synthetic camera named `camera`."""
 
-    (camera_dir,) = [c for c in discover_sessions.fn(raw_root) if c.camera == camera]
+    camera_dir = sole_capture(raw_root, camera)
     ingested = ingest_camera.fn(camera_dir, config)
-    interval = resolve_cut_interval.fn(raw_root, camera_dir.date, camera_dir.session, ingested)
+    interval = resolve_cut_interval.fn(camera_dir.metadata_path, ingested)
     cut_record, _ = cut_camera.fn(ingested, interval, config)
     orient_record, _ = orient_camera.fn(cut_record, config)
-    retilt_record, _ = retilt_camera.fn(orient_record, raw_root, config)
+    retilt_record, _ = retilt_camera.fn(orient_record, config)
     crop_record, _ = crop_camera.fn(retilt_record, config)
     return crop_record
 
@@ -99,11 +109,12 @@ def test_detect_pose_camera_publishes_a_pose_document(
 
     assert record == crop_record  # the task doesn't mutate the record
     destination = pose_path(
-        config.pose_root, Path(crop_record.date) / crop_record.session, crop_record.camera
+        config.pose_root, crop_record.relative.parent, crop_record.relative.name
     )
     assert destination.is_file()
     document = read_pose(destination)
-    assert document.camera == "Side"
+    assert document.capture_id == "9 July/cnj_45kg_Set1/Side"
+    assert document.role == "side"
     assert document.stage == "s4_crop"
     assert document.frames.count == crop_record.n_frames
     assert step.derived["n_frames"] == crop_record.n_frames
@@ -134,7 +145,7 @@ def test_detect_pose_camera_orders_frame_offsets_from_zero(
     _, _ = detect_pose_camera.fn(crop_record, config, _StubModel())
 
     destination = pose_path(
-        config.pose_root, Path(crop_record.date) / crop_record.session, crop_record.camera
+        config.pose_root, crop_record.relative.parent, crop_record.relative.name
     )
     document = read_pose(destination)
     assert document.frames.t_ms[0] == 0
