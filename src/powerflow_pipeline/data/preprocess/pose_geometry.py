@@ -40,17 +40,18 @@ def lookup_patch_depth_m(
 ) -> float | None:
     """Median metres depth in a `radius`-pixel box around `(row, col)`.
 
-    Prefers confidence-`2` pixels, falls back to confidence `1` and `2` together, and falls
-    back again to *any* depth reading regardless of confidence (including `0`) before giving
-    up -- confidence-`0` doesn't mean the value is garbage, only that ARKit won't vouch for
-    it (commonly just past its guaranteed-reliable range); a real session (11 July/50kg_Set3/
-    Front) showed confidence-`0` depth at a detected joint varying smoothly frame to frame
-    rather than looking like noise. This is one tier more permissive than 4-retilt.md §1's
-    own floor-region selection (which never uses confidence `0`) -- a joint position is
-    useful even at reduced trust, where the floor plane fit has the luxury of pooling
-    thousands of points and can afford to be choosier. The only thing that always disqualifies
-    a pixel is depth `0` itself (no return at all). Returns `None` only when the box holds no
-    depth reading whatsoever -- the caller stores that as a dropped-out frame, never a
+    Prefers confidence-`2` pixels, falls back to confidence `1` and `2` together, and never a
+    zero (no-return) depth or a confidence-`0` reading -- the same confidence-based selection
+    4-retilt.md §1 uses for the floor region, at the scale of one joint's neighbourhood.
+
+    A confidence-`0` tier was tried and removed: measured on 11 July/50kg_Set3/Front it bought
+    4% more joint-frames (5276 -> 5490) while inflating the median upper-arm bone from 0.38 m
+    to 1.63 m, because a limb held out against a distant background lets an unvouched-for
+    reading land on the floor metres behind the lifter. Coverage is not worth positions that
+    are confidently wrong.
+
+    Returns `None` when the box holds no usable depth at all (occlusion, out of LiDAR range,
+    e.g. a wrist behind the barbell) -- the caller stores that as a dropped-out frame, never a
     fabricated position.
     """
 
@@ -60,11 +61,7 @@ def lookup_patch_depth_m(
     patch_depth = depth[r0:r1, c0:c1]
     patch_confidence = confidence[r0:r1, c0:c1]
 
-    for mask in (
-        patch_confidence == 2,
-        np.isin(patch_confidence, (1, 2)),
-        np.isin(patch_confidence, (0, 1, 2)),
-    ):
+    for mask in (patch_confidence == 2, np.isin(patch_confidence, (1, 2))):
         selected = patch_depth[mask & (patch_depth > 0)]
         if selected.size:
             return float(np.median(selected)) / 1000.0

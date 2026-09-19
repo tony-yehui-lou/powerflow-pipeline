@@ -14,6 +14,7 @@ from pathlib import Path
 
 import av
 import mediapipe as mp
+import numpy as np
 from mediapipe.tasks.python import BaseOptions, vision
 from mediapipe.tasks.python.vision.core.vision_task_running_mode import VisionTaskRunningMode
 
@@ -23,6 +24,27 @@ from powerflow_pipeline.data.preprocess.pose_landmark_mapping import map_landmar
 from powerflow_pipeline.data.preprocess.pose_model import JointPixelSeries
 
 PixelPair = tuple[int, int]
+
+
+def pad_to_square(array: np.ndarray) -> np.ndarray:
+    """Pad an RGB frame to a square with black, anchored top-left.
+
+    MediaPipe mis-projects its ROI on non-square input -- it warns `Using NORM_RECT without
+    IMAGE_DIMENSIONS is only supported for the square ROI` on every such frame, and on a real
+    1420x1668 capture (11 July/50kg_Set3/Front) that put the entire detected skeleton up in
+    the ceiling rafters instead of on the lifter filling the lower two-thirds of the frame.
+    Padding bottom/right only leaves every original pixel at its own coordinate, so a landmark
+    normalized against the square maps back by multiplying by the square's side -- there is no
+    offset to undo, unlike a centred letterbox.
+    """
+
+    height, width = array.shape[:2]
+    side = max(height, width)
+    if height == width:
+        return array
+    padded = np.zeros((side, side, array.shape[2]), dtype=array.dtype)
+    padded[:height, :width] = array
+    return padded
 
 
 class MediaPipePoseDetector:
@@ -38,22 +60,19 @@ class MediaPipePoseDetector:
         self,
         model_path: Path | None = None,
         *,
-        min_pose_detection_confidence: float = 0.05,
-        min_pose_presence_confidence: float = 0.05,
+        min_pose_detection_confidence: float = 0.5,
+        min_pose_presence_confidence: float = 0.5,
     ) -> None:
         """`min_pose_detection_confidence`/`min_pose_presence_confidence` gate whether a pose
         is found at all (not the per-joint `visibility` this class stores as `confidence`).
-        MediaPipe's own default for both is 0.5, which real barbell-lift footage (motion blur,
-        distance from camera, occlusion by the bar/plates) was found far too strict for --
-        diagnosed against a real session (11 July/50kg_Set3/Front, 371 frames) where a
-        threshold sweep with this same "full" model found: 0.5 and 0.2 both detected a pose
-        in zero frames, 0.15 -> 45, 0.1 -> 117, 0.05 -> 226. The model variant (lite vs full)
-        was NOT the deciding factor -- only the threshold was. 0.05 is chosen here to
-        maximize recall on genuinely marginal footage like this; it also lets through the
-        lowest-confidence detections, which is what the per-frame `confidence` this class
-        stores (from `visibility`) is for -- callers can filter further downstream rather
-        than have this class silently drop them. See
-        docs/specs/preprocessing/S5-pose-model-recommendation.md, Risks: "Accuracy validation".
+
+        Both keep MediaPipe's own 0.5 default. An earlier revision lowered them to 0.05 after
+        a real session (11 July/50kg_Set3/Front) detected nothing at 0.5 -- that was treating
+        the symptom: the real defect was non-square input (see `pad_to_square`), and the low
+        threshold did not recover the lifter, it manufactured phantom skeletons in the ceiling
+        rafters which then back-projected to ~10 m of nonsense. With the padding fixed, 0.5
+        finds the lifter with per-joint visibility of 0.67-1.00 on that same footage, so there
+        is no reason to accept detections the model itself doubts.
         """
 
         path = model_path or ensure_pose_landmarker_model("full")
@@ -96,15 +115,17 @@ class MediaPipePoseDetector:
         pixel_positions: dict[JointId, list[PixelPair | None]],
         confidences: dict[JointId, list[float]],
     ) -> None:
-        array = frame.to_ndarray(format="rgb24")
-        height, width = array.shape[:2]
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=array)
+        padded = pad_to_square(frame.to_ndarray(format="rgb24"))
+        side = padded.shape[0]
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=padded)
         result = self._landmarker.detect(mp_image)
         if not result.pose_landmarks:
             return  # no pose found this frame -- every joint stays at its None/0.0 default
 
+        # Both axes scale by `side`, not by the original width/height: the landmarks are
+        # normalized against the padded square (see `pad_to_square`).
         raw = {
-            index: (landmark.x * width, landmark.y * height, landmark.visibility or 0.0)
+            index: (landmark.x * side, landmark.y * side, landmark.visibility or 0.0)
             for index, landmark in enumerate(result.pose_landmarks[0])
         }
         for joint, (x, y, confidence) in map_landmarks_to_joints(raw).items():

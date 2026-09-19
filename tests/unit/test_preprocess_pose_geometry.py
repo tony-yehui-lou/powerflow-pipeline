@@ -61,13 +61,14 @@ def test_lookup_patch_depth_m_never_selects_zero_depth() -> None:
     assert lookup_patch_depth_m(depth, confidence, row=1, col=1, radius=1) is None
 
 
-def test_lookup_patch_depth_m_falls_back_to_confidence_0_rather_than_giving_up() -> None:
-    # Confidence 0 doesn't mean garbage, only that ARKit won't vouch for it -- a real depth
-    # reading with no confident (1/2) alternative nearby is still used, not dropped.
+def test_lookup_patch_depth_m_returns_none_when_wholly_unconfident() -> None:
+    # A confidence-0 tier was tried and removed: on real footage it let a limb held out
+    # against a distant background sample the floor metres behind the lifter, tripling the
+    # measured upper-arm length for 4% more coverage.
     depth = np.full((3, 3), 1500, dtype=np.uint16)
     confidence = np.zeros((3, 3), dtype=np.uint8)
 
-    assert lookup_patch_depth_m(depth, confidence, row=1, col=1, radius=1) == pytest.approx(1.5)
+    assert lookup_patch_depth_m(depth, confidence, row=1, col=1, radius=1) is None
 
 
 def test_lookup_patch_depth_m_prefers_confidence_1_and_2_over_0_when_both_present() -> None:

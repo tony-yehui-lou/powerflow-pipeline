@@ -18,7 +18,38 @@ import numpy as np
 import pytest
 
 from powerflow_pipeline.data.common.models import HUMAN_SKELETON
-from powerflow_pipeline.data.preprocess.mediapipe_pose_detector import MediaPipePoseDetector
+from powerflow_pipeline.data.preprocess.mediapipe_pose_detector import (
+    MediaPipePoseDetector,
+    pad_to_square,
+)
+
+
+def test_pad_to_square_squares_a_portrait_frame_without_moving_a_pixel() -> None:
+    array = np.arange(4 * 3 * 3, dtype=np.uint8).reshape(4, 3, 3)  # h=4, w=3
+
+    padded = pad_to_square(array)
+
+    assert padded.shape == (4, 4, 3)
+    # Every original pixel keeps its own coordinate -- that's what lets a landmark
+    # normalized against the square map straight back with no offset to undo.
+    assert np.array_equal(padded[:4, :3], array)
+    assert np.array_equal(padded[:, 3], np.zeros((4, 3), dtype=np.uint8))
+
+
+def test_pad_to_square_squares_a_landscape_frame() -> None:
+    array = np.full((2, 5, 3), 7, dtype=np.uint8)
+
+    padded = pad_to_square(array)
+
+    assert padded.shape == (5, 5, 3)
+    assert np.array_equal(padded[:2, :5], array)
+    assert np.array_equal(padded[2:], np.zeros((3, 5, 3), dtype=np.uint8))
+
+
+def test_pad_to_square_leaves_an_already_square_frame_alone() -> None:
+    array = np.full((6, 6, 3), 3, dtype=np.uint8)
+
+    assert pad_to_square(array) is array
 
 
 def _write_blank_rgb(path: Path, n_frames: int, size: tuple[int, int] = (64, 64)) -> None:
@@ -75,15 +106,18 @@ def _patch_mediapipe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     (tmp_path / "model.task").touch()
 
 
-def test_defaults_the_confidence_thresholds_to_0_05(
+def test_keeps_mediapipes_own_default_confidence_thresholds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Deliberately NOT loosened: a lower threshold doesn't recover a missed lifter, it
+    # invents phantom skeletons (see `pad_to_square` for the defect that actually caused
+    # the zero-detection session this once tried to paper over).
     _patch_mediapipe(monkeypatch, tmp_path)
 
     MediaPipePoseDetector(model_path=tmp_path / "model.task")
 
-    assert _StubOptions.last_kwargs["min_pose_detection_confidence"] == 0.05
-    assert _StubOptions.last_kwargs["min_pose_presence_confidence"] == 0.05
+    assert _StubOptions.last_kwargs["min_pose_detection_confidence"] == 0.5
+    assert _StubOptions.last_kwargs["min_pose_presence_confidence"] == 0.5
 
 
 def test_accepts_a_custom_confidence_threshold(
