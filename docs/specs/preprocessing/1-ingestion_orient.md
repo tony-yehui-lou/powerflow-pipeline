@@ -36,7 +36,7 @@ acceptance criteria for the whole pipeline — each stage exists to establish ex
 
 | I2 | Frame `k` of **every** stream (RGB, depth, confidence, odometry, IMU) refers to the **same instant**, and `t=0` is a common origin. | S2 |
 
-| I3 | Images are **undistorted** and rectified as if the camera were **level** (no tilt w.r.t. vertical). | S3 |
+| I3 | Images are **undistorted** and rectified as if the camera were **level** (no tilt w.r.t. vertical). **Tilt and roll only** — yaw is not corrected, so the floor-anchored frame's horizontal axes are the camera's, not the athlete's. Heights are comparable across captures; horizontal displacements are not anatomical for an obliquely-placed camera. | S3 |
 
 | I4 | **Metric scale is carried by depth**: real-world distances come from the depth stream and `camera_matrix.csv`, not from pixel size. Pixel-space scale normalization was attempted and retired — see `5-scaling.md`. | S0–S3 |
 
@@ -58,7 +58,12 @@ the wrong thing.
 
 ## 2. Inputs
 
-There is one folder with date as the name (called date folder from this point onwards) and two positional folders inside the date folder (named Front and Side) and one `metadata.yaml` inside the data folder. The below describes the content in each positional folder.
+Two raw directory shapes exist, and one run handles both. The shape is **detected per capture**, from where its operator `metadata.yaml` sits -- never from a directory name, and never from a flag:
+
+- **Two-camera session** — `<date>/<session>/<camera>/`, with `<camera>` named `Front` or `Side`, and one `metadata.yaml` at the **session** level governing both. Each camera takes the role its directory name gives it.
+- **Single-camera capture** — `<date>/<liftType>/<trial>/`, with the streams at the trial level and `metadata.yaml` **inside the capture**. Its role is `single`, and it is its own group: nothing else shares its lift window.
+
+A *role* (`front` / `side` / `single`) is only a lookup key for which `metadata.yaml` fields a capture reads. It says nothing about where the camera pointed: a `single` capture may be square-on or oblique, and the pipeline neither knows nor asks. The below describes the content of one capture directory, which is identical in both shapes.
 
 Per capture session, per camera (**assumption**: StrayScanner-style capture on iOS):
 

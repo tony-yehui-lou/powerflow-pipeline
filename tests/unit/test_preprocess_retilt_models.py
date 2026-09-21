@@ -39,6 +39,7 @@ def test_plane_fit_round_trips_through_json() -> None:
         n_points=1200,
         n_frames_sampled=8,
         confidence_mode="conf2_only",
+        floor_offset_m=1.5,
     )
     assert PlaneFit.model_validate_json(fit.model_dump_json()) == fit
 
@@ -53,6 +54,7 @@ def test_retilt_result_round_trips_through_json() -> None:
             n_points=900,
             n_frames_sampled=6,
             confidence_mode="conf1_and_2",
+            floor_offset_m=1.2,
         ),
         gravity_agreement_deg=1.2,
         homography_rgb=[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
@@ -73,6 +75,7 @@ def test_retilt_result_allows_no_gravity_agreement() -> None:
             n_points=600,
             n_frames_sampled=4,
             confidence_mode="conf2_only",
+            floor_offset_m=1.0,
         ),
         gravity_agreement_deg=None,
         homography_rgb=[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],

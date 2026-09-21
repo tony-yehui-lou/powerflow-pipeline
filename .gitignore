@@ -3,6 +3,9 @@ data/interim/
 data/processed/
 data/*_output/
 
+# Downloaded pretrained model weights (mediapipe_assets.py fetches these on demand).
+models_cache/
+
 .venv/
 __pycache__/
 *.py[cod]

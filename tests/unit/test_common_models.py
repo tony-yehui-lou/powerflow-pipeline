@@ -8,7 +8,17 @@ import pytest
 from pydantic import ValidationError
 
 from powerflow_pipeline.data.common.context import OutputMode, RunContext
-from powerflow_pipeline.data.common.models import CropBounds, FileOp, Scan, StepResult
+from powerflow_pipeline.data.common.models import (
+    HUMAN_SKELETON,
+    Bone,
+    CropBounds,
+    FileOp,
+    Joint,
+    Position3D,
+    Scan,
+    Skeleton,
+    StepResult,
+)
 
 
 def test_crop_bounds_exposes_width_and_height() -> None:
@@ -82,6 +92,106 @@ def test_context_rejects_a_missing_input_root(tmp_path: Path) -> None:
             output_root=tmp_path / "output",
             output_mode=OutputMode.PUBLISH,
         )
+
+
+def test_position3d_round_trips_through_json() -> None:
+    position = Position3D(x=1.0, y=-2.5, z=0.0)
+    assert Position3D.model_validate_json(position.model_dump_json()) == position
+
+
+def test_position3d_is_frozen() -> None:
+    position = Position3D(x=0.0, y=0.0, z=0.0)
+    with pytest.raises(ValidationError):
+        position.x = 1.0
+
+
+def test_joint_holds_an_id_and_a_3d_position() -> None:
+    joint = Joint(id="leftKnee", position=Position3D(x=0.1, y=0.2, z=0.3))
+    assert joint.id == "leftKnee"
+    assert joint.position == Position3D(x=0.1, y=0.2, z=0.3)
+
+
+def test_joint_rejects_an_unknown_id() -> None:
+    with pytest.raises(ValidationError):
+        Joint(id="leftPinky", position=Position3D(x=0.0, y=0.0, z=0.0))  # type: ignore[arg-type]
+
+
+def test_joint_is_frozen() -> None:
+    joint = Joint(id="head", position=Position3D(x=0.0, y=0.0, z=0.0))
+    with pytest.raises(ValidationError):
+        joint.id = "leftAnkle"  # type: ignore[assignment]
+
+
+def test_bone_rejects_a_self_loop() -> None:
+    with pytest.raises(ValidationError, match="distinct"):
+        Bone(from_joint="head", to_joint="head")
+
+
+def test_bone_is_frozen() -> None:
+    bone = Bone(from_joint="leftClavicle", to_joint="head")
+    with pytest.raises(ValidationError):
+        bone.to_joint = "rightClavicle"  # type: ignore[assignment]
+
+
+def test_skeleton_rejects_a_bone_referencing_an_unlisted_joint() -> None:
+    with pytest.raises(ValidationError, match="not in joints"):
+        Skeleton(
+            joints=("head", "leftClavicle"),
+            bones=(Bone(from_joint="leftClavicle", to_joint="rightClavicle"),),
+        )
+
+
+def test_skeleton_rejects_duplicate_joints() -> None:
+    with pytest.raises(ValidationError, match="duplicate"):
+        Skeleton(joints=("head", "head"), bones=())
+
+
+def test_skeleton_is_frozen() -> None:
+    skeleton = Skeleton(joints=("head",), bones=())
+    with pytest.raises(ValidationError):
+        skeleton.joints = ("head", "leftAnkle")  # type: ignore[assignment]
+
+
+def test_human_skeleton_has_fifteen_joints_and_fifteen_bones() -> None:
+    assert len(HUMAN_SKELETON.joints) == 15
+    assert len(HUMAN_SKELETON.bones) == 15
+    assert len(set(HUMAN_SKELETON.joints)) == 15  # no duplicates
+
+
+def test_human_skeleton_contains_head_and_the_seven_paired_joints() -> None:
+    assert set(HUMAN_SKELETON.joints) == {
+        "leftAnkle",
+        "rightAnkle",
+        "leftKnee",
+        "rightKnee",
+        "leftHip",
+        "rightHip",
+        "leftShoulder",
+        "rightShoulder",
+        "leftElbow",
+        "rightElbow",
+        "leftWrist",
+        "rightWrist",
+        "leftClavicle",
+        "rightClavicle",
+        "head",
+    }
+
+
+def test_human_skeleton_hip_bone_crosses_the_body_and_is_not_mirrored() -> None:
+    pairs = {(bone.from_joint, bone.to_joint) for bone in HUMAN_SKELETON.bones}
+    assert ("leftHip", "rightHip") in pairs
+    assert ("rightHip", "leftHip") not in pairs
+
+
+def test_human_skeleton_both_clavicles_connect_to_the_single_head_joint() -> None:
+    pairs = {(bone.from_joint, bone.to_joint) for bone in HUMAN_SKELETON.bones}
+    assert ("leftClavicle", "head") in pairs
+    assert ("rightClavicle", "head") in pairs
+
+
+def test_human_skeleton_round_trips_through_json() -> None:
+    assert Skeleton.model_validate_json(HUMAN_SKELETON.model_dump_json()) == HUMAN_SKELETON
 
 
 def test_destination_for_follows_the_output_mode(tmp_path: Path) -> None:

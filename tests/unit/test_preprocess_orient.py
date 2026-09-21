@@ -15,7 +15,6 @@ import pytest
 from powerflow_pipeline.data.common.models import StepResult
 from powerflow_pipeline.data.preprocess.config import RotationDirection
 from powerflow_pipeline.data.preprocess.models import CameraRecord
-from powerflow_pipeline.data.preprocess.tasks.discover import discover_sessions
 from powerflow_pipeline.data.preprocess.tasks.ingest import ingest_camera
 from powerflow_pipeline.data.preprocess.tasks.orient import orient_camera
 from tests.conftest import (
@@ -25,6 +24,7 @@ from tests.conftest import (
     ODOMETRY_CY,
     STATIC_FX,
     MakeCamera,
+    sole_capture,
 )
 from tests.unit.test_preprocess_ingest import make_config
 
@@ -35,7 +35,7 @@ def orient(tmp_path: Path, make_camera: MakeCamera, **overrides: object) -> Path
     raw = tmp_path / "raw"
     make_camera(raw, rgb_frames=4, depth_frames=5)
     config = make_config(tmp_path, **overrides)
-    (camera,) = discover_sessions.fn(raw)
+    camera = sole_capture(raw)
     record = ingest_camera.fn(camera, config)
 
     orient_camera.fn(record, config)
@@ -50,7 +50,7 @@ def orient_result(
     raw = tmp_path / "raw"
     make_camera(raw, rgb_frames=4, depth_frames=5)
     config = make_config(tmp_path, **overrides)
-    (camera,) = discover_sessions.fn(raw)
+    camera = sole_capture(raw)
     record = ingest_camera.fn(camera, config)
 
     return orient_camera.fn(record, config)
@@ -114,7 +114,7 @@ def test_depth_keeps_its_dtype_and_invents_no_values(
     raw = tmp_path / "raw"
     make_camera(raw, rgb_frames=4, depth_frames=5)
     config = make_config(tmp_path)
-    (camera,) = discover_sessions.fn(raw)
+    camera = sole_capture(raw)
     record = ingest_camera.fn(camera, config)
     orient_camera.fn(record, config)
 
@@ -272,7 +272,7 @@ def test_a_variable_rate_clip_survives_the_re_encode(
     raw = tmp_path / "raw"
     make_camera(raw, rgb_frames=48, depth_frames=49, imu_rows=96)
     config = make_config(tmp_path)
-    (camera,) = discover_sessions.fn(raw)
+    camera = sole_capture(raw)
     record = ingest_camera.fn(camera, config)
 
     orient_camera.fn(record, config)
@@ -305,7 +305,7 @@ def test_publishing_twice_refuses_to_overwrite(tmp_path: Path, make_camera: Make
     raw = tmp_path / "raw"
     make_camera(raw, rgb_frames=4, depth_frames=5)
     config = make_config(tmp_path)
-    (camera,) = discover_sessions.fn(raw)
+    camera = sole_capture(raw)
     record = ingest_camera.fn(camera, config)
     orient_camera.fn(record, config)
 
@@ -317,7 +317,7 @@ def test_overwrite_replaces_a_published_camera(tmp_path: Path, make_camera: Make
     raw = tmp_path / "raw"
     make_camera(raw, rgb_frames=4, depth_frames=5)
     config = make_config(tmp_path)
-    (camera,) = discover_sessions.fn(raw)
+    camera = sole_capture(raw)
     record = ingest_camera.fn(camera, config)
     orient_camera.fn(record, config)
 
@@ -334,7 +334,7 @@ def test_the_step_result_reports_the_file_operations(
     raw = tmp_path / "raw"
     make_camera(raw, rgb_frames=4, depth_frames=5)
     config = make_config(tmp_path)
-    (camera,) = discover_sessions.fn(raw)
+    camera = sole_capture(raw)
     record = ingest_camera.fn(camera, config)
 
     _, result = orient_camera.fn(record, config)

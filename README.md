@@ -5,18 +5,33 @@ Data and training pipelines for PowerFlow. Prefect 3 orchestrates every data pip
 
 The pipeline that exists today is **`preprocess`** — Step 1 of Preprocessing V2:
 
+Two raw directory shapes are handled by one invocation, detected per capture from where the
+operator `metadata.yaml` sits — there is no layout flag:
+
+| | two-camera session | single-camera capture |
+|---|---|---|
+| Raw shape | `<date>/<session>/<camera>/` streams | `<date>/<liftType>/<trial>/` streams |
+| `metadata.yaml` | at the **session**, shared | **inside** the capture |
+| Roles | `front`, `side` from the directory name | `single` |
+| Cut interval owner | the `side` camera | the capture itself |
+
+Output **mirrors the raw path exactly**, so a stage tree has whatever depth its raw counterpart
+has. A *role* is only a lookup key for which `metadata.yaml` fields a capture reads; it says
+nothing about where the camera pointed.
+
 - **S0 · Ingest** — validate each camera in a raw capture and emit a normalized `record.json`.
-- **S1 · Cut** — derive a shared real-world epoch interval from the Side camera's operator-declared
-  lift window, then trim every time-indexed stream in both cameras to that interval. This establishes
-  invariant **I2**: frame `k` of every stream refers to the same real-world instant across both
-  cameras.
+- **S1 · Cut** — derive a shared real-world epoch interval from the interval owner's
+  operator-declared lift window, then trim every time-indexed stream in the group to that
+  interval. This establishes invariant **I2**: frame `k` of every stream refers to the same
+  real-world instant across every camera of the group.
 - **S2 · Orient** — rotate RGB, depth, and confidence to portrait, and rotate the camera matrix
   with them. This establishes invariant **I1**: every image is portrait, in the frame its
   intrinsics describe.
 - **S3 · Retilt** — fit one floor plane per camera from depth in an operator-annotated region,
   derive the tilt/roll that levels it, and rectify RGB, depth, and confidence with the resulting
   per-camera homography. This establishes invariant **I3**: the floor plane is level in every
-  image.
+  image. Tilt and roll only — **yaw is never corrected**, so the floor-anchored frame's
+  horizontal axes are the camera's, not the athlete's.
 
 A camera that fails validation is **rejected with a reason**, never emitted degraded.
 
@@ -107,16 +122,26 @@ uv run powerflow preprocess \
 
 | Flag | Meaning |
 |---|---|
-| `--input` | Raw capture root: `<date>/<session>/<camera>/`. |
+| `--input` | Raw capture root; both shapes above, mixed freely. |
 | `--records` | Where S0 writes `record.json`, `metadata.yaml`, and `manifest.json`. |
 | `--cut` | Where S1 publishes the trimmed, time-aligned landscape streams. |
 | `--output` | Where S2 publishes the rotated portrait streams. |
 | `--retilt` | Where S3 publishes the rectified, floor-levelled streams. |
+| `--only` | Process only captures whose id matches this glob, e.g. `'22 August/Snch/*'`. Keep a two-camera session whole — see below. |
 | `--rotation` | `cw` (default) or `ccw`. |
 | `--dry-run` | Validate and plan, write nothing. |
 | `--overwrite` | Replace cameras already published (default: refuse). |
 
 Start with `--dry-run`: it validates every camera and reports what *would* be written.
+
+`--only` selects **captures**, and a two-camera session derives its cut interval from its
+`Side` camera, so a glob that excludes it rejects the group with `session has no Side camera`.
+Match the session, not one camera:
+
+```bash
+uv run powerflow preprocess ... --only '11 July/30kg_Set1/*'    # the session, both cameras
+uv run powerflow preprocess ... --only '22 August/Snch/110kgSnch1'  # a single-camera capture
+```
 
 A full run over the four cameras in `data/raw/9 July` takes on the order of **10+ minutes** — it
 decodes, cuts, rotates, retilts, and re-encodes ~22k frames three times — and produces several GB
@@ -131,11 +156,15 @@ stage publishes to its own output root instead.
 |---|---|---|
 | **Run manifest** (JSON) | `<--records>/manifest.json` | end of the flow |
 | **Run manifest** (markdown) | Prefect artifact, key `preprocess-run-manifest` | end of the flow |
-| Per-camera validated record | `<--records>/<date>/<session>/<camera>/record.json` | S0 |
-| Per-session metadata | `<date>/<session>/metadata.yaml` in **all four** stage roots | S0 |
-| Trimmed landscape streams + provenance | `<--cut>/<date>/<session>/<camera>/` incl. `cut_sidecar.json` | S1 |
-| Portrait streams + provenance | `<--output>/<date>/<session>/<camera>/` incl. `sidecar.json` | S2 |
-| Floor-levelled portrait streams + provenance | `<--retilt>/<date>/<session>/<camera>/` incl. `retilt_sidecar.json` | S3 |
+| Per-camera validated record | `<--records>/<capture path>/record.json` | S0 |
+| Per-group metadata | the raw `metadata.yaml`'s own relative path, in **all five** stage roots | S0 |
+| Trimmed landscape streams + provenance | `<--cut>/<capture path>/` incl. `cut_sidecar.json` | S1 |
+| Portrait streams + provenance | `<--output>/<capture path>/` incl. `sidecar.json` | S2 |
+| Floor-levelled portrait streams + provenance | `<--retilt>/<capture path>/` incl. `retilt_sidecar.json` | S3 |
+
+`<capture path>` is the capture's raw-relative path — `11 July/30kg_Set1/Front` or
+`22 August/Snch/110kgSnch1` — so every stage tree matches its raw counterpart byte for byte in
+path shape.
 
 Every stage output root gets its own byte-identical copy of `metadata.yaml`, so a consumer of one
 stage never has to reach back into an earlier stage's tree to learn which lift the pixels came from.
@@ -182,6 +211,16 @@ jq '{tilt_deg, roll_deg, gravity_agreement_deg}' \
   ../data/s3_retilt_output/11\ July/30kg_Set1/Front/retilt_sidecar.json
 ```
 
+For a single-camera capture day, the run also compares every capture's fit against the day's
+median tilt, roll and camera height — one tripod shot them all, so a capture that disagrees is
+suspect even when its own RMS is tight. That check is **warn-only** and lands in the run
+manifest, not the sidecar: the median is not knowable when the sidecar is written.
+
+```bash
+jq -r '.scans[] | select(.warnings | length > 0) | "\(.scan_id): \(.warnings | join("; "))"' \
+  ../data/s0_ingest_output/manifest.json
+```
+
 `gravity_agreement_deg` compares the fitted floor normal against gravity derived from odometry —
 it is recorded and **warns** past `retilt_gravity_tolerance_deg`, but never rejects a camera on
 its own. `plane_rms_residual_m` and `translation_span_m` are the other two numbers worth checking
@@ -203,7 +242,7 @@ src/powerflow_pipeline/data/
     geometry.py           # pure rotation maths: no I/O, no Prefect
     timeline.py           # pure epoch-time maths: no I/O, no Prefect
     retilt.py             # pure plane-fit/tilt/homography maths: no I/O, no Prefect
-    tasks/                # one @task per logical step: discover, ingest, cut, orient, retilt, metadata
+    tasks/                # one @task per logical step: discover, ingest, cut, orient, retilt, crop, pose, metadata
 prefect.yaml              # deployments
 tests/unit/               # fast, no Prefect backend
 tests/integration/        # flow + CLI, under prefect_test_harness

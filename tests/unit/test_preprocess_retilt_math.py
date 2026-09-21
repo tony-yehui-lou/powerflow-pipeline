@@ -69,7 +69,7 @@ def test_parse_region_point_rejects_unparseable() -> None:
         parse_region_point("0.4, 0.6")
 
 
-def test_read_floor_region_picks_the_camera_prefix() -> None:
+def test_read_floor_region_picks_the_role_prefix() -> None:
     metadata = {
         "video": {
             "front_floor_region_bottom_left_in_pixels": "(0, 1)",
@@ -78,7 +78,7 @@ def test_read_floor_region_picks_the_camera_prefix() -> None:
             "side_floor_region_top_right_in_pixels": "(0.40268, 0.64503)",
         }
     }
-    region = read_floor_region(metadata, "Side")
+    region = read_floor_region(metadata, "side")
     assert (region.x0, region.y0, region.x1, region.y1) == pytest.approx(
         (0.0, 1.0, 0.40268, 0.64503)
     )
@@ -86,7 +86,7 @@ def test_read_floor_region_picks_the_camera_prefix() -> None:
 
 def test_read_floor_region_rejects_missing_field() -> None:
     with pytest.raises(ScanRejected):
-        read_floor_region({"video": {}}, "Front")
+        read_floor_region({"video": {}}, "front")
 
 
 def test_read_floor_region_rejects_unparseable_field() -> None:
@@ -97,7 +97,7 @@ def test_read_floor_region_rejects_unparseable_field() -> None:
         }
     }
     with pytest.raises(ScanRejected):
-        read_floor_region(metadata, "Front")
+        read_floor_region(metadata, "front")
 
 
 def test_read_floor_region_rejects_degenerate_region() -> None:
@@ -108,7 +108,79 @@ def test_read_floor_region_rejects_degenerate_region() -> None:
         }
     }
     with pytest.raises(ScanRejected):
-        read_floor_region(metadata, "Front")
+        read_floor_region(metadata, "front")
+
+
+def test_read_floor_region_reads_unprefixed_keys_for_a_single_camera() -> None:
+    """One camera governed by its own metadata has nothing to tell apart, so no prefix."""
+
+    metadata = {
+        "video": {
+            "floor_region_bottom_left_in_pixels": "(0.20, 0.78)",
+            "floor_region_top_right_in_pixels": "(0.55, 0.68)",
+        }
+    }
+
+    region = read_floor_region(metadata, "single")
+
+    assert (region.x0, region.y0, region.x1, region.y1) == pytest.approx((0.20, 0.78, 0.55, 0.68))
+
+
+def test_read_floor_region_accepts_the_side_alias_for_a_single_camera() -> None:
+    """Its lift window is already spelled `..._side_in_ms`; either spelling should work."""
+
+    metadata = {
+        "video": {
+            "side_floor_region_bottom_left_in_pixels": "(0.20, 0.78)",
+            "side_floor_region_top_right_in_pixels": "(0.55, 0.68)",
+        }
+    }
+
+    region = read_floor_region(metadata, "single")
+
+    assert (region.x0, region.x1) == pytest.approx((0.20, 0.55))
+
+
+def test_read_floor_region_does_not_fall_back_to_a_front_prefix_for_a_single_camera() -> None:
+    """The real August files pair a `front_` bottom-left with an unprefixed top-right.
+
+    That is a half-corrected annotation, not an alternate spelling. Reading it would accept
+    a rectangle nobody finished checking; the rejection names the unprefixed field instead.
+    """
+
+    metadata = {
+        "video": {
+            "front_floor_region_bottom_left_in_pixels": "(0.65204, 0.66118)",
+            "floor_region_top_right_in_pixels": "(0.79080, 0.86117)",
+        }
+    }
+
+    with pytest.raises(ScanRejected, match="floor_region_bottom_left_in_pixels"):
+        read_floor_region(metadata, "single")
+
+
+def test_read_floor_region_rejects_an_inverted_y_region_rather_than_swapping() -> None:
+    """`y` runs top->bottom, so bottom-left's y must be the larger one.
+
+    Every real August region is written the other way round. Silently swapping would make
+    the pipeline accept an annotation whose author had the convention backwards, which is
+    exactly the state their rectangle turned out to be in.
+    """
+
+    metadata = {
+        "video": {
+            "floor_region_bottom_left_in_pixels": "(0.65204, 0.66118)",
+            "floor_region_top_right_in_pixels": "(0.79080, 0.86117)",
+        }
+    }
+
+    with pytest.raises(ScanRejected, match="degenerate on y"):
+        read_floor_region(metadata, "single")
+
+
+def test_read_floor_region_rejects_when_the_video_block_is_absent() -> None:
+    with pytest.raises(ScanRejected, match="no video block"):
+        read_floor_region({}, "single")
 
 
 # --- depth_intrinsics --------------------------------------------------------------------
@@ -221,6 +293,28 @@ def test_fit_plane_orients_normal_toward_camera() -> None:
     fit = fit_plane(points)
 
     assert fit.normal[1] < 0
+
+
+def test_fit_plane_recovers_floor_offset() -> None:
+    # A point on the plane's own Y-axis intercept (X=Z=0) sits at exactly `c` metres --
+    # `floor_offset_m` is the perpendicular (not axis-aligned) distance, so it's `c`
+    # divided by the plane normal's un-normalized length, per the module's own formula.
+    a, b, c = 0.05, 0.02, 1.5
+    points = _synthetic_plane_points(a=a, b=b, c=c, n=4000, noise_m=0.0005)
+
+    fit = fit_plane(points)
+
+    expected = c / math.sqrt(a**2 + 1 + b**2)
+    assert fit.floor_offset_m == pytest.approx(expected, rel=1e-2)
+
+
+def test_fit_plane_floor_offset_is_exactly_c_for_a_level_floor() -> None:
+    # No tilt/roll (a = b = 0): the perpendicular distance collapses to `c` itself.
+    points = _synthetic_plane_points(a=0.0, b=0.0, c=2.0, n=2000, noise_m=0.0005)
+
+    fit = fit_plane(points)
+
+    assert fit.floor_offset_m == pytest.approx(2.0, rel=1e-2)
 
 
 # --- tilt_roll_from_normal / rectifying_rotation ------------------------------------------

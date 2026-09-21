@@ -1,8 +1,9 @@
 """S1 · Cut and cross-camera time alignment -> establishes I2.
 
-The Side camera's operator-declared lift window is the source of truth. `resolve_cut_interval`
-converts it to a real-world epoch interval once per session; `cut_camera` applies that same
-interval to each camera in turn, trimming every time-indexed stream by timestamp. Depth and
+The interval owner's operator-declared lift window is the source of truth -- the `side`
+camera of a two-camera session, or a single-camera capture itself. `resolve_cut_interval`
+converts that window to a real-world epoch interval once per group; `cut_camera` applies the
+same interval to each capture in turn, trimming every time-indexed stream by timestamp. Depth and
 confidence are always selected together, by the same indices, so neither can drift from the
 other. RGB, depth, confidence, and odometry share `odometry.csv:timestamp` as their
 authoritative frame clock; IMU remains on its own monotonic clock. `timeline.epoch_ms_series`
@@ -47,7 +48,10 @@ FRAME_TIMESTAMP_SOURCE = "odometry.csv:timestamp"
 
 
 def read_lift_window(path: Path) -> tuple[int, int]:
-    """Validate and read the Side lift window from the raw session `metadata.yaml`.
+    """Validate and read the lift window from the raw operator `metadata.yaml`.
+
+    The `..._side_in_ms` field names are identifiers, not assertions about a camera: a
+    single-camera capture spells them the same way, and every real August file already does.
 
     Raises `ScanRejected` with the exact field name at fault: a missing file reads as
     both fields missing, since neither can be trusted.
@@ -80,13 +84,13 @@ def _camera_created_epoch_ms(record: CameraRecord) -> int:
     """`record.creation_time` as epoch milliseconds, or a `ScanRejected` naming the camera."""
 
     if not record.creation_time:
-        raise ScanRejected(f"rgb creation time missing for camera {record.camera}")
+        raise ScanRejected(f"rgb creation time missing for camera {record.capture_id}")
     try:
         return creation_time_to_epoch_ms(record.creation_time)
     except ValueError as error:
         raise ScanRejected(
             "rgb creation time not convertible to epoch ms for camera "
-            f"{record.camera}: {record.creation_time!r}"
+            f"{record.capture_id}: {record.creation_time!r}"
         ) from error
 
 
@@ -99,8 +103,8 @@ def _read_timestamps(path: Path, name: str) -> list[float]:
     return [float(value) for value in frame["timestamp"]]
 
 
-def _side_capture_span_ms(source: Path, created_epoch_ms: int) -> tuple[int, int]:
-    """The Side camera's own start/end epoch, from `odometry.csv`'s timestamp column."""
+def _owner_capture_span_ms(source: Path, created_epoch_ms: int) -> tuple[int, int]:
+    """The interval owner's own start/end epoch, from `odometry.csv`'s timestamp column."""
 
     timestamps = _read_timestamps(source / "odometry.csv", "odometry.csv")
     if not timestamps:
@@ -110,12 +114,13 @@ def _side_capture_span_ms(source: Path, created_epoch_ms: int) -> tuple[int, int
 
 
 @task
-def resolve_cut_interval(
-    raw_root: Path, date: str, session: str, side_record: CameraRecord
-) -> CutInterval:
-    """Read the Side lift window and derive the epoch interval both cameras share."""
+def resolve_cut_interval(metadata_path: Path, side_record: CameraRecord) -> CutInterval:
+    """Read the owner's lift window and derive the epoch interval its whole group shares.
 
-    metadata_path = raw_root / date / session / "metadata.yaml"
+    `metadata_path` is the capture's own governing file, resolved once by discovery, rather
+    than rebuilt from a `<date>/<session>` pair the single-camera layout does not have.
+    """
+
     log_task_paths(metadata_path, None)
     lift_start_ms, lift_end_ms = read_lift_window(metadata_path)
     side_created_epoch_ms = _camera_created_epoch_ms(side_record)
@@ -123,7 +128,7 @@ def resolve_cut_interval(
         side_created_epoch_ms, lift_start_ms, lift_end_ms
     )
 
-    capture_start_ms, capture_end_ms = _side_capture_span_ms(
+    capture_start_ms, capture_end_ms = _owner_capture_span_ms(
         side_record.source, side_created_epoch_ms
     )
     if cut_end_epoch_ms < capture_start_ms or cut_start_epoch_ms > capture_end_ms:
@@ -252,7 +257,7 @@ def cut_camera(
     )
     paired_keep = [index for index in depth_keep if index < paired_count]
     if not paired_keep:
-        raise ScanRejected(f"no rgb frames in cut interval for camera {record.camera}")
+        raise ScanRejected(f"no rgb frames in cut interval for camera {record.capture_id}")
     if not imu_keep:
         raise ScanRejected("empty imu.csv in cut interval")
 
@@ -303,6 +308,17 @@ def cut_camera(
         FileOp(op="write", src=source, dst=destination / "cut_sidecar.json"),
         FileOp(op="publish", src=source, dst=destination),
     ]
+    window_ms = interval.lift_end_time_side_in_ms - interval.lift_start_time_side_in_ms
+    warnings: list[str] = []
+    if window_ms < round(config.cut_min_window_s * 1000):
+        # Never a rejection: a snatch really can take under two seconds, and the shortest
+        # real windows observed (1.64 s, 1.75 s) are plausible lifts. Worth surfacing, in
+        # case the window was mis-measured rather than short.
+        warnings.append(
+            f"lift window is {window_ms / 1000:.2f} s, below "
+            f"cut_min_window_s={config.cut_min_window_s}"
+        )
+
     step = StepResult(
         derived={
             "cut_start_epoch_ms": start_ms,
@@ -313,6 +329,7 @@ def cut_camera(
             "imu_kept": len(imu_keep),
             "frame_timestamp_source": FRAME_TIMESTAMP_SOURCE,
         },
+        warnings=warnings,
         file_ops=file_ops,
     )
     cut_record = record.model_copy(

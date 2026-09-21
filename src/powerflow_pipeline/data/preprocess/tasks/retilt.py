@@ -219,21 +219,22 @@ def _validate_exit(
 
 @task(retries=1)
 def retilt_camera(
-    record: CameraRecord, raw_root: Path, config: PreprocessConfig
+    record: CameraRecord, config: PreprocessConfig
 ) -> tuple[CameraRecord, StepResult]:
     """Fit one camera's floor plane, derive its rectifying rotation, and rewarp it whole.
 
-    `record` is S2's *output* record (portrait dimensions, rotated `K`); `raw_root` is
-    needed because the floor region lives in the raw session `metadata.yaml` (§1), not
-    anywhere in S2's output tree.
+    `record` is S2's *output* record (portrait dimensions, rotated `K`). The floor region
+    lives in the raw operator `metadata.yaml` (§1) rather than anywhere in S2's output
+    tree, and the record carries that file's resolved path -- both layouts keep it in a
+    different place, and only discovery is allowed to know where.
     """
 
     source = record.source
     destination = config.retilt_root / record.relative
     log_task_paths(source, destination)
 
-    metadata = _read_metadata(raw_root / record.date / record.session / "metadata.yaml")
-    region = read_floor_region(metadata, record.camera)
+    metadata = _read_metadata(record.metadata_path)
+    region = read_floor_region(metadata, record.role)
     bounds = region.pixel_bounds(record.depth_width, record.depth_height)
 
     file_ops = [
@@ -328,6 +329,7 @@ def retilt_camera(
         "tilt_deg": tilt_deg,
         "roll_deg": roll_deg,
         "floor_normal_cam": plane.normal,
+        "floor_offset_m": plane.floor_offset_m,
         "plane_rms_residual_m": plane.rms_residual_m,
         "n_floor_points": plane.n_points,
         "n_frames_sampled": plane.n_frames_sampled,
@@ -352,6 +354,9 @@ def retilt_camera(
             "roll_deg": roll_deg,
             "gravity_agreement_deg": agreement,
             "plane_rms_residual_m": plane.rms_residual_m,
+            # The flow pools this across a capture day for the consistency check
+            # (`assess_plane_consistency`), which cannot run until every capture is fitted.
+            "floor_offset_m": plane.floor_offset_m,
         },
         warnings=warnings,
         file_ops=file_ops,

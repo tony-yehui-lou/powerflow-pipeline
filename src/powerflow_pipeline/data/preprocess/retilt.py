@@ -27,7 +27,13 @@ from scipy.spatial.transform import Rotation
 
 from powerflow_pipeline.data.common.errors import ScanRejected
 from powerflow_pipeline.data.common.models import CropBounds
-from powerflow_pipeline.data.preprocess.models import FloorRegion, Intrinsics, PlaneFit
+from powerflow_pipeline.data.preprocess.models import (
+    CaptureRole,
+    FloorRegion,
+    Intrinsics,
+    PlaneConsistency,
+    PlaneFit,
+)
 
 ConfidenceMode = Literal["conf2_only", "conf1_and_2"]
 
@@ -54,25 +60,43 @@ def parse_region_point(raw: str) -> tuple[float, float]:
         raise ValueError(f"not a parenthesised point: {raw!r}") from error
 
 
-def _region_prefix(camera: str) -> str:
-    key = camera.strip().lower()
-    if key == "front":
-        return "front_"
-    if key == "side":
-        return "side_"
-    raise ScanRejected(f"no floor-region convention for camera {camera!r}")
+def region_prefixes(role: CaptureRole) -> tuple[str, ...]:
+    """The key prefixes to try, in order, for one role's floor-region fields (4-retilt.md §1).
 
+    A `single` capture writes the keys **unprefixed**: its metadata governs one camera, so
+    there is nothing to tell apart. The `side_` spelling is accepted as an alias, because
+    the lift window in the same file is already spelled `..._side_in_ms` and whichever the
+    operator types should work.
 
-def read_floor_region(metadata: dict[str, Any], camera: str) -> FloorRegion:
-    """Read this camera's operator-annotated floor region from the raw `metadata.yaml`.
-
-    Raises `ScanRejected` naming the exact missing/malformed field, never guesses.
+    There is deliberately **no `front_` alias**. Real August files pair a `front_`-prefixed
+    bottom-left with an unprefixed top-right; that is an authoring mistake, not an alternate
+    spelling, and reading it would silently accept a half-corrected annotation.
     """
 
-    prefix = _region_prefix(camera)
+    if role == "front":
+        return ("front_",)
+    if role == "side":
+        return ("side_",)
+    return ("", "side_")
+
+
+def read_floor_region(metadata: dict[str, Any], role: CaptureRole) -> FloorRegion:
+    """Read this capture's operator-annotated floor region from the raw `metadata.yaml`.
+
+    Raises `ScanRejected` naming the exact missing/malformed field, never guesses. When a
+    role accepts several spellings, the rejection names the *primary* one.
+    """
+
     video = metadata.get("video")
     if not isinstance(video, dict):
-        raise ScanRejected(f"missing floor region for camera {camera}: no video block")
+        raise ScanRejected(f"missing floor region for role {role}: no video block")
+
+    prefixes = region_prefixes(role)
+    for prefix in prefixes:
+        if f"{prefix}floor_region_bottom_left_in_pixels" in video:
+            break
+    else:
+        prefix = prefixes[0]
 
     bl_field = f"{prefix}floor_region_bottom_left_in_pixels"
     tr_field = f"{prefix}floor_region_top_right_in_pixels"
@@ -92,7 +116,7 @@ def read_floor_region(metadata: dict[str, Any], camera: str) -> FloorRegion:
     try:
         return FloorRegion(x0=x0, y0=y0, x1=x1, y1=y1)
     except ValueError as error:
-        raise ScanRejected(f"invalid floor region for camera {camera}: {error}") from error
+        raise ScanRejected(f"invalid floor region for role {role}: {error}") from error
 
 
 def depth_intrinsics(
@@ -209,8 +233,14 @@ def fit_plane(
         normal_unit = -normal_unit
 
     predicted_y = a * x + b * z + c
-    residuals = (predicted_y - y) / math.sqrt(a**2 + 1 + b**2)
+    norm_factor = math.sqrt(a**2 + 1 + b**2)
+    residuals = (predicted_y - y) / norm_factor
     rms = float(np.sqrt(np.mean(residuals**2)))
+
+    # Signed distance from the origin (the camera's optical centre) to the plane
+    # `a*X - Y + b*Z + c = 0`, i.e. `c / ||(a, -1, b)||` -- positive since the floor sits
+    # below a camera shooting roughly level (§3's Assumptions).
+    floor_offset_m = c / norm_factor
 
     return PlaneFit(
         normal=normal_unit.tolist(),
@@ -218,6 +248,7 @@ def fit_plane(
         n_points=n,
         n_frames_sampled=n_frames_sampled,
         confidence_mode=confidence_mode,
+        floor_offset_m=floor_offset_m,
     )
 
 
@@ -338,3 +369,72 @@ def translation_span_m(xyz: np.ndarray) -> float:
     diffs = xyz[:, None, :] - xyz[None, :, :]
     distances = np.linalg.norm(diffs, axis=-1)
     return float(distances.max())
+
+
+def assess_plane_consistency(
+    fits: dict[str, tuple[float, float, float]],
+    *,
+    tilt_tolerance_deg: float,
+    height_tolerance_m: float,
+) -> PlaneConsistency:
+    """Compare one capture day's `(tilt_deg, roll_deg, floor_offset_m)` fits against each other.
+
+    The per-capture gates in `4-retilt.md` §7 measure how *tightly* points fit a plane, never
+    whether that plane is the floor: a rectangle that caught a spectator's head produced a
+    0.85 cm RMS at -44.9 deg of tilt on real data, sliding under the 45 deg gate by a tenth of
+    a degree. For a rig that did not move between captures, disagreement with the day's median
+    catches exactly that, and nothing a tight fit can disguise.
+
+    The median is the reference because it survives a minority of wrong fits; the mean would
+    be dragged toward them and could exonerate the very capture that pulled it. Warn-only,
+    and the caller decides what to do with the messages.
+    """
+
+    tilts = sorted(tilt for tilt, _, _ in fits.values())
+    rolls = sorted(roll for _, roll, _ in fits.values())
+    heights = sorted(height for _, _, height in fits.values())
+
+    tilt_median = float(np.median(tilts))
+    roll_median = float(np.median(rolls))
+    height_median = float(np.median(heights))
+
+    deviations: dict[str, dict[str, float]] = {}
+    warnings: dict[str, list[str]] = {}
+    for capture_id, (tilt, roll, height) in fits.items():
+        tilt_deviation = abs(tilt - tilt_median)
+        roll_deviation = abs(roll - roll_median)
+        height_deviation = abs(height - height_median)
+        deviations[capture_id] = {
+            "tilt_deviation_deg": tilt_deviation,
+            "roll_deviation_deg": roll_deviation,
+            "height_deviation_m": height_deviation,
+        }
+        messages: list[str] = []
+        if tilt_deviation > tilt_tolerance_deg:
+            messages.append(
+                f"fitted tilt {tilt:.2f} deg differs from the capture day's median "
+                f"{tilt_median:.2f} deg by {tilt_deviation:.2f} deg, exceeding "
+                f"retilt_group_tilt_tolerance_deg={tilt_tolerance_deg}"
+            )
+        if roll_deviation > tilt_tolerance_deg:
+            messages.append(
+                f"fitted roll {roll:.2f} deg differs from the capture day's median "
+                f"{roll_median:.2f} deg by {roll_deviation:.2f} deg, exceeding "
+                f"retilt_group_tilt_tolerance_deg={tilt_tolerance_deg}"
+            )
+        if height_deviation > height_tolerance_m:
+            messages.append(
+                f"fitted camera height {height:.3f} m differs from the capture day's median "
+                f"{height_median:.3f} m by {height_deviation:.3f} m, exceeding "
+                f"retilt_group_height_tolerance_m={height_tolerance_m}"
+            )
+        warnings[capture_id] = messages
+
+    return PlaneConsistency(
+        tilt_median_deg=tilt_median,
+        roll_median_deg=roll_median,
+        height_median_m=height_median,
+        n_captures=len(fits),
+        deviations=deviations,
+        warnings=warnings,
+    )

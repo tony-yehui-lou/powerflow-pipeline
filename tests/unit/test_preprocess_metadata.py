@@ -8,15 +8,15 @@ from typing import Any
 import pytest
 import yaml
 
-from powerflow_pipeline.data.preprocess.tasks.discover import discover_sessions
 from powerflow_pipeline.data.preprocess.tasks.ingest import ingest_camera
 from powerflow_pipeline.data.preprocess.tasks.metadata import (
     derive_from_session_name,
     is_template,
+    lift_type_from_group_folder,
     load_meta_template,
-    write_session_metadata,
+    write_group_metadata,
 )
-from tests.conftest import MakeCamera
+from tests.conftest import MakeCamera, sole_capture
 from tests.unit.test_preprocess_ingest import make_config
 
 
@@ -67,10 +67,10 @@ def test_metadata_records_derived_values_separately_from_measured_ones(
     make_camera(raw)
     make_meta_template(raw)
     config = make_config(tmp_path)
-    (camera,) = discover_sessions.fn(raw)
+    camera = sole_capture(raw)
     record = ingest_camera.fn(camera, config)
 
-    paths = write_session_metadata.fn(raw / "9 July" / "meta.yaml", [record], config)
+    paths = write_group_metadata.fn(raw / "9 July" / "meta.yaml", [record], config)
 
     assert paths[0] == config.record_root / "9 July" / "cnj_45kg_Set1" / "metadata.yaml"
     metadata = yaml.safe_load(paths[0].read_text())
@@ -96,10 +96,10 @@ def test_the_lift_timestamp_comes_from_the_video(
     make_camera(raw)
     make_meta_template(raw)
     config = make_config(tmp_path)
-    (camera,) = discover_sessions.fn(raw)
+    camera = sole_capture(raw)
     record = ingest_camera.fn(camera, config)
 
-    paths = write_session_metadata.fn(raw / "9 July" / "meta.yaml", [record], config)
+    paths = write_group_metadata.fn(raw / "9 July" / "meta.yaml", [record], config)
     metadata = yaml.safe_load(paths[0].read_text())
 
     # 2026-07-09T10:04:15Z, the creation_time tag on rgb.mp4.
@@ -115,10 +115,10 @@ def test_every_stage_output_carries_the_same_metadata(
     make_camera(raw)
     make_meta_template(raw)
     config = make_config(tmp_path)
-    (camera,) = discover_sessions.fn(raw)
+    camera = sole_capture(raw)
     record = ingest_camera.fn(camera, config)
 
-    paths = write_session_metadata.fn(raw / "9 July" / "meta.yaml", [record], config)
+    paths = write_group_metadata.fn(raw / "9 July" / "meta.yaml", [record], config)
 
     assert [path.parent.parent.parent for path in paths] == list(config.stage_roots)
     assert all(path.name == "metadata.yaml" for path in paths)
@@ -133,13 +133,14 @@ def test_the_observed_camera_facts_are_recorded(
     make_camera(raw)
     make_meta_template(raw)
     config = make_config(tmp_path)
-    (camera,) = discover_sessions.fn(raw)
+    camera = sole_capture(raw)
     record = ingest_camera.fn(camera, config)
 
-    paths = write_session_metadata.fn(raw / "9 July" / "meta.yaml", [record], config)
+    paths = write_group_metadata.fn(raw / "9 July" / "meta.yaml", [record], config)
     cameras = yaml.safe_load(paths[0].read_text())["cameras"]
 
-    assert cameras[0]["camera"] == "Front"
+    assert cameras[0]["capture_id"] == "9 July/cnj_45kg_Set1/Front"
+    assert cameras[0]["role"] == "front"
     assert cameras[0]["rgb_width"] == 64
     assert cameras[0]["n_frames"] == 4
     assert cameras[0]["counts"]["depth"] == 5
@@ -153,10 +154,10 @@ def test_a_dry_run_writes_no_metadata(
     make_camera(raw)
     make_meta_template(raw)
     config = make_config(tmp_path, dry_run=True)
-    (camera,) = discover_sessions.fn(raw)
+    camera = sole_capture(raw)
     record = ingest_camera.fn(camera, config)
 
-    paths = write_session_metadata.fn(raw / "9 July" / "meta.yaml", [record], config)
+    paths = write_group_metadata.fn(raw / "9 July" / "meta.yaml", [record], config)
 
     assert not any(path.exists() for path in paths)
 
@@ -171,9 +172,84 @@ def test_the_raw_meta_yaml_is_never_mutated(
     template_path = make_meta_template(raw)
     before = template_path.read_bytes()
     config = make_config(tmp_path)
-    (camera,) = discover_sessions.fn(raw)
+    camera = sole_capture(raw)
     record = ingest_camera.fn(camera, config)
 
-    write_session_metadata.fn(template_path, [record], config)
+    write_group_metadata.fn(template_path, [record], config)
 
     assert template_path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("110kgSnch1", {"type": "snch", "weight_in_kg": 110.0, "attempt": 1}),
+        ("82kgCnJ2", {"type": "cnj", "weight_in_kg": 82.0, "attempt": 2}),
+        ("62.5kgSnch3", {"type": "snch", "weight_in_kg": 62.5, "attempt": 3}),
+    ],
+)
+def test_single_camera_trial_names_are_parsed_by_attempt(
+    name: str, expected: dict[str, object]
+) -> None:
+    """The trial name reads weight-first with no separators, and numbers attempts, not sets."""
+
+    assert derive_from_session_name(name) == expected
+
+
+def test_single_camera_metadata_lands_beside_its_own_streams(
+    tmp_path: Path, make_camera: MakeCamera, make_session_metadata: Any
+) -> None:
+    """August mirrors the raw path: the trial's own directory, not a session one level up."""
+
+    raw = tmp_path / "raw"
+    make_camera(raw, date="22 August", session="Snch", camera="110kgSnch1")
+    make_session_metadata(raw, date="22 August", session="Snch", camera="110kgSnch1")
+    config = make_config(tmp_path)
+    record = ingest_camera.fn(sole_capture(raw), config)
+
+    paths = write_group_metadata.fn(raw / "22 August" / "meta.yaml", [record], config)
+
+    assert paths[0] == (config.record_root / "22 August" / "Snch" / "110kgSnch1" / "metadata.yaml")
+    metadata = yaml.safe_load(paths[0].read_text())
+    assert metadata["meta_status"] == "absent"  # no date-level template for August
+    assert metadata["capture_id"] == "22 August/Snch/110kgSnch1"
+    assert metadata["layout"] == "single_camera"
+    assert metadata["derived_from_session_name"]["attempt"] == 1
+
+
+def test_the_lift_type_comes_from_the_group_folder_not_the_file(
+    tmp_path: Path, make_camera: MakeCamera, make_session_metadata: Any
+) -> None:
+    """Every August file once read `type: snch`, including the five filed under `CnJ/`.
+
+    The folder is authoritative; the file's own value is carried through beside it so
+    nothing is silently corrected.
+    """
+
+    raw = tmp_path / "raw"
+    make_camera(raw, date="22 August", session="CnJ", camera="82kgCnJ2")
+    metadata_path = make_session_metadata(raw, date="22 August", session="CnJ", camera="82kgCnJ2")
+    metadata_path.write_text(metadata_path.read_text().replace("lift:", "lift:\n  type: snch", 1))
+    config = make_config(tmp_path)
+    record = ingest_camera.fn(sole_capture(raw), config)
+
+    paths = write_group_metadata.fn(raw / "22 August" / "meta.yaml", [record], config)
+    metadata = yaml.safe_load(paths[0].read_text())
+
+    assert metadata["derived_from_session_name"]["type"] == "cnj"
+    assert metadata["derived_from_session_name"]["type_source"] == "group folder"
+    assert metadata["lift_type_in_source_file"] == "snch"
+
+
+def test_a_two_camera_session_has_no_group_folder_lift_type(
+    tmp_path: Path, make_camera: MakeCamera, make_session_metadata: Any
+) -> None:
+    """Only the single-camera layout files trials under a lift-type folder."""
+
+    raw = tmp_path / "raw"
+    make_camera(raw)
+    make_session_metadata(raw)
+    config = make_config(tmp_path)
+    record = ingest_camera.fn(sole_capture(raw), config)
+
+    assert lift_type_from_group_folder(record) is None

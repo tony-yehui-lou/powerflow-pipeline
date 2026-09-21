@@ -14,11 +14,10 @@ from powerflow_pipeline.data.preprocess.crop import depth_bounds
 from powerflow_pipeline.data.preprocess.models import CameraRecord
 from powerflow_pipeline.data.preprocess.tasks.crop import crop_camera
 from powerflow_pipeline.data.preprocess.tasks.cut import cut_camera, resolve_cut_interval
-from powerflow_pipeline.data.preprocess.tasks.discover import discover_sessions
 from powerflow_pipeline.data.preprocess.tasks.ingest import ingest_camera, read_frame
 from powerflow_pipeline.data.preprocess.tasks.orient import orient_camera
 from powerflow_pipeline.data.preprocess.tasks.retilt import retilt_camera
-from tests.conftest import MakeCamera, MakeSessionMetadata
+from tests.conftest import MakeCamera, MakeSessionMetadata, sole_capture
 from tests.unit.test_preprocess_ingest import make_config as _base_make_config
 
 
@@ -35,12 +34,12 @@ def _build_retilt_record(
 ) -> CameraRecord:
     """Run S0 -> S1 -> S2 -> S3 on the one synthetic camera named `camera`."""
 
-    (camera_dir,) = [c for c in discover_sessions.fn(raw_root) if c.camera == camera]
+    camera_dir = sole_capture(raw_root, camera)
     ingested = ingest_camera.fn(camera_dir, config)
-    interval = resolve_cut_interval.fn(raw_root, camera_dir.date, camera_dir.session, ingested)
+    interval = resolve_cut_interval.fn(camera_dir.metadata_path, ingested)
     cut_record, _ = cut_camera.fn(ingested, interval, config)
     orient_record, _ = orient_camera.fn(cut_record, config)
-    retilt_record, _ = retilt_camera.fn(orient_record, raw_root, config)
+    retilt_record, _ = retilt_camera.fn(orient_record, config)
     return retilt_record
 
 

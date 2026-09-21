@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
@@ -10,6 +11,23 @@ from pydantic import BaseModel, Field, model_validator
 from powerflow_pipeline.data.common.models import CropBounds
 
 ImageFrame = Literal["portrait", "landscape"]
+
+# Which `metadata.yaml` fields a capture reads, and nothing else. A role is a lookup key,
+# not a statement about where the camera was pointed: `single` says one camera governed by
+# its own metadata file, never that the camera was square-on to anything.
+CaptureRole = Literal["side", "front", "single"]
+
+
+class CaptureLayout(StrEnum):
+    """Which raw directory shape a capture was found in.
+
+    Detected from *where its operator `metadata.yaml` lives* (`tasks/discover.py`), never
+    from a directory name -- a name match would break the moment a capture day is foldered
+    differently again.
+    """
+
+    MULTI_CAMERA = "multi_camera"  # `<date>/<session>/<camera>/`, metadata at the session
+    SINGLE_CAMERA = "single_camera"  # `<date>/<group>/<trial>/`, metadata inside the capture
 
 
 class Intrinsics(BaseModel):
@@ -40,31 +58,45 @@ class StreamCounts(BaseModel):
     imu: int
 
 
-class CameraDir(BaseModel):
-    """One `<date>/<session>/<camera>` directory found by discovery."""
+class CaptureUnit(BaseModel):
+    """One raw capture directory, carrying the identity every stage keys off.
 
-    date: str
-    session: str
-    camera: str
-    source: Path
+    Replaces the old `(date, session, camera)` triple, which cannot name a capture in the
+    single-camera layout. `relative` is the single source of truth for output paths, so
+    "mirror the raw path exactly" falls out for both layouts with no branching in the
+    stages -- they all build destinations as `<stage_root> / record.relative`.
+    """
+
+    source: Path  # the raw directory holding the streams
+    relative: Path  # raw-relative path -> the output path under every stage root
+    metadata_path: Path  # the operator metadata.yaml governing THIS capture
+    metadata_relative: Path  # that file's raw-relative path -> where each stage copies it
+    group_id: str  # captures sharing one cut interval
+    role: CaptureRole
+    layout: CaptureLayout
+
+    @property
+    def capture_id(self) -> str:
+        """The manifest identifier for this capture."""
+
+        return str(self.relative)
 
     @property
     def camera_id(self) -> str:
-        """The manifest identifier for this camera."""
+        """Alias kept so manifest readers written against the two-camera layout still work."""
 
-        return f"{self.date}/{self.session}/{self.camera}"
-
-    @property
-    def relative(self) -> Path:
-        return Path(self.date) / self.session / self.camera
+        return self.capture_id
 
 
 class CameraRecord(BaseModel):
     """S0's validated description of one camera. S1 reads it instead of re-probing."""
 
-    date: str
-    session: str
-    camera: str
+    relative: Path
+    metadata_path: Path
+    metadata_relative: Path
+    group_id: str
+    role: CaptureRole
+    layout: CaptureLayout
     source: Path
     rgb_width: int
     rgb_height: int
@@ -80,12 +112,18 @@ class CameraRecord(BaseModel):
     stopwatch_legible: bool | None
 
     @property
-    def camera_id(self) -> str:
-        return f"{self.date}/{self.session}/{self.camera}"
+    def capture_id(self) -> str:
+        return str(self.relative)
 
     @property
-    def relative(self) -> Path:
-        return Path(self.date) / self.session / self.camera
+    def camera_id(self) -> str:
+        return self.capture_id
+
+    @property
+    def date(self) -> str:
+        """The capture-day directory: the first segment of every raw-relative path."""
+
+        return self.relative.parts[0]
 
 
 class CutInterval(BaseModel):
@@ -128,8 +166,7 @@ class AthleteMeta(BaseModel):
 class SessionRecord(BaseModel):
     """One lift: its metadata and the cameras that survived S0."""
 
-    date: str
-    session: str
+    group_id: str
     lift: LiftMeta
     athlete: AthleteMeta
     cameras: list[CameraRecord]
@@ -170,6 +207,12 @@ class PlaneFit(BaseModel):
     n_points: int
     n_frames_sampled: int
     confidence_mode: Literal["conf2_only", "conf1_and_2"]
+    # Perpendicular distance, in metres, from the camera's optical centre to the fitted
+    # plane -- i.e. the camera's height above the floor. Unlike `normal`, this is invariant
+    # under S3's own rectifying rotation (a rotation about the optical centre never changes
+    # distances from it), so S5 Pose reads it straight off this pre-rectification fit to
+    # place the floor in the *rectified* frame it actually detects joints in (issue #118).
+    floor_offset_m: float
 
 
 class RetiltResult(BaseModel):
@@ -183,3 +226,24 @@ class RetiltResult(BaseModel):
     homography_depth: list[list[float]]
     valid_bounds_px: CropBounds
     translation_span_m: float
+
+
+class PlaneConsistency(BaseModel):
+    """How one capture day's fitted floor planes agree with each other.
+
+    Only meaningful for a `SINGLE_CAMERA` day, where one unmoved tripod shot every capture:
+    a fit can pass every per-capture gate in `4-retilt.md` §7 and still be wrong -- RMS
+    measures how *tightly* the points fit a plane, never whether that plane is the floor.
+    A rectangle that caught a spectator's head fits its own surface beautifully. The day's
+    captures agreeing with each other is the cheapest available check that they did not.
+
+    Warn-only, like the odometry-gravity check it sits beside: it assumes a rig that never
+    moved, and wants calibrating against a second single-camera day before it rejects.
+    """
+
+    tilt_median_deg: float
+    roll_median_deg: float
+    height_median_m: float
+    n_captures: int
+    deviations: dict[str, dict[str, float]]  # capture_id -> tilt/roll/height deviation
+    warnings: dict[str, list[str]]  # capture_id -> messages, empty for an agreeing capture

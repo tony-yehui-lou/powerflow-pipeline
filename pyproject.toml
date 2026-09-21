@@ -15,6 +15,9 @@ dependencies = [
     "torch>=2.5",
     "prefect>=3.7.8",
     "pyyaml>=6",
+    "mediapipe==0.10.35",
+    "rtmlib>=0.0.16",
+    "onnxruntime>=1.30.0",
 ]
 
 [dependency-groups]
@@ -57,5 +60,5 @@ files = ["src", "tests"]
 
 # Third-party packages that ship no type stubs.
 [[tool.mypy.overrides]]
-module = ["cv2.*", "av.*", "scipy.*", "pandas.*"]
+module = ["cv2.*", "av.*", "scipy.*", "pandas.*", "mediapipe.*", "rtmlib.*"]
 ignore_missing_imports = true
