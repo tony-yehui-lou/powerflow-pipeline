@@ -203,7 +203,9 @@ HUMAN_SKELETON = Skeleton(
 # Normative source: "Human Body Model Data Storage v1" (docs/spec, GitHub issue #117).
 SKELETON_ID: Final = "human-v2"  # versioned: stored pose is only readable against its topology
 SKELETON_SCHEMA_VERSION: Final = "1.0.0"
-POSE_SCHEMA_VERSION: Final = "2.0.0"
+# 2.1.0 made JointSeries.position nullable as a whole, for documents S5 produced with its
+# metric lift switched off (PoseOutput.PIXELS_2D). A 2.0.0 reader must not be handed one.
+POSE_SCHEMA_VERSION: Final = "2.1.0"
 
 # Which `metadata.yaml` fields a capture reads -- a lookup key, not a claim about where the
 # camera pointed. Replaces a `Literal["Side", "Front"]` camera name, which could not name a
@@ -246,22 +248,44 @@ class JointSeries(BaseModel):
 
     A frame the detector could not place carries `None` for both positions and zero confidence;
     the arrays keep their full length so every index still refers to the same frame.
+
+    `position` is the whole-array `None` when S5 ran its 2D detection step without the metric
+    lift (`PoseOutput.PIXELS_2D`). That is a different claim from a tuple of `None`s: the tuple
+    says every frame dropped out, `None` says positions were never computed for this capture.
+    Collapsing the two would let a consumer read "the detector saw nothing" off a document whose
+    2D detections are complete.
     """
 
     model_config = _DOCUMENT_CONFIG
 
-    position: tuple[PositionTriple | None, ...]  # metres, floor frame (see PoseDocument)
+    # metres, floor frame (see PoseDocument); None when the metric lift did not run
+    position: tuple[PositionTriple | None, ...] | None
     pixel_position: tuple[PixelPair | None, ...]  # image space of PoseDocument.stage
     confidence: tuple[float, ...]
 
     @model_validator(mode="after")
     def validate_series(self) -> JointSeries:
-        if not len(self.position) == len(self.pixel_position) == len(self.confidence):
+        if len(self.pixel_position) != len(self.confidence):
+            raise ValueError("pixelPosition and confidence must be the same length")
+        if self.position is not None and len(self.position) != len(self.pixel_position):
             raise ValueError("position, pixelPosition and confidence must be the same length")
-        triples = zip(self.position, self.pixel_position, self.confidence, strict=True)
-        for index, (point, pixel, confidence) in enumerate(triples):
+
+        for index, (pixel, confidence) in enumerate(
+            zip(self.pixel_position, self.confidence, strict=True)
+        ):
             if not 0.0 <= confidence <= 1.0:
                 raise ValueError(f"frame {index}: confidence must lie in [0, 1]")
+            # Without positions the pixel carries the drop-out, so it takes position's role in
+            # the confidence rule below.
+            if self.position is None and pixel is None and confidence != 0.0:
+                raise ValueError(f"frame {index}: an occluded joint must carry zero confidence")
+
+        if self.position is None:
+            return self
+
+        for index, (point, pixel, confidence) in enumerate(
+            zip(self.position, self.pixel_position, self.confidence, strict=True)
+        ):
             if (point is None) != (pixel is None):
                 raise ValueError(
                     f"frame {index}: position and pixelPosition must drop out together"
@@ -271,11 +295,17 @@ class JointSeries(BaseModel):
         return self
 
     def __len__(self) -> int:
-        return len(self.position)
+        # pixelPosition, not position: it is the one array every document carries.
+        return len(self.pixel_position)
 
     def position_at(self, index: int) -> Position3D | None:
-        """The stored triple for one frame, rebuilt as a `Position3D`."""
+        """The stored triple for one frame, rebuilt as a `Position3D`.
 
+        Always `None` for a 2D-only series -- there is no position to rebuild.
+        """
+
+        if self.position is None:
+            return None
         point = self.position[index]
         if point is None:
             return None
@@ -317,7 +347,25 @@ class PoseDocument(BaseModel):
                 raise ValueError(
                     f"joint {joint!r} holds {len(series)} frames, expected {self.frames.count}"
                 )
+        # The metric lift is a per-run stage setting, so it either ran for this capture or it
+        # did not. A document where some joints carry positions and others do not could only
+        # come from a bug, and would make `has_positions` a question without an answer.
+        lifted = {series.position is not None for series in self.joints.values()}
+        if len(lifted) > 1:
+            raise ValueError(
+                "pose mixes lifted and pixel-only joints: either every joint carries positions "
+                "or none does"
+            )
         return self
+
+    @property
+    def has_positions(self) -> bool:
+        """Whether S5's metric lift ran for this capture, i.e. `position` is populated.
+
+        `validate_joints` guarantees the joints agree, so any one of them answers for all.
+        """
+
+        return next(iter(self.joints.values())).position is not None
 
     def to_document(self) -> dict[str, Any]:
         """The camelCase wire form written to `pose.json`."""

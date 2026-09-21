@@ -10,10 +10,11 @@ from pathlib import Path
 import pytest
 
 from powerflow_pipeline.data.common.errors import PublishError
-from powerflow_pipeline.data.common.models import HUMAN_SKELETON, JointId, JointSeries
+from powerflow_pipeline.data.common.models import HUMAN_SKELETON, JointId
 from powerflow_pipeline.data.common.pose_storage import pose_path, read_pose
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig
-from powerflow_pipeline.data.preprocess.models import CameraRecord, Intrinsics
+from powerflow_pipeline.data.preprocess.models import CameraRecord
+from powerflow_pipeline.data.preprocess.pose_model import JointPixelSeries
 from powerflow_pipeline.data.preprocess.tasks.crop import crop_camera
 from powerflow_pipeline.data.preprocess.tasks.cut import cut_camera, resolve_cut_interval
 from powerflow_pipeline.data.preprocess.tasks.ingest import ingest_camera
@@ -35,26 +36,14 @@ def make_config(tmp_path: Path, **overrides: object) -> PreprocessConfig:
 
 
 class _StubModel:
-    """A fixed, valid pose for every frame -- stands in for the real model (issue #118)."""
+    """A fixed, valid 2D detection for every frame -- stands in for a real `Detector2D`."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[Path, int]] = []
 
-    def predict(
-        self,
-        rgb_path: Path,
-        n_frames: int,
-        *,
-        depth_dir: Path,
-        confidence_dir: Path,
-        intrinsics: Intrinsics,
-        rgb_size: tuple[int, int],
-        depth_size: tuple[int, int],
-        floor_offset_m: float,
-    ) -> dict[JointId, JointSeries]:
+    def detect(self, rgb_path: Path, n_frames: int) -> dict[JointId, JointPixelSeries]:
         self.calls.append((rgb_path, n_frames))
-        series = JointSeries(
-            position=tuple((0.0, 0.0, 0.0) for _ in range(n_frames)),
+        series = JointPixelSeries(
             pixel_position=tuple((0, 0) for _ in range(n_frames)),
             confidence=tuple(0.9 for _ in range(n_frames)),
         )

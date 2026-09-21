@@ -1,10 +1,14 @@
-"""S5 · Pose detection -> runs an injected joint-detection model on S4's cropped RGB and
-publishes one `PoseDocument` per camera (docs/spec, GitHub issue #116).
+"""S5 · Pose detection -> runs an injected 2D detector on S4's cropped RGB and publishes one
+`PoseDocument` per camera (docs/spec, GitHub issue #116).
 
-The model itself is out of scope (issue #118): `model` is a `PoseModel` this task calls
+S5 stops in pixel space. The metric lift to floor-frame metres is S6 Lift, a separate stage
+reading this stage's output, so the two can be re-run independently: detection is the expensive
+half and depth sampling is the half still being revised.
+
+The detector itself is out of scope (issue #118): `detector` is a `Detector2D` this task calls
 through, so the stage's plumbing -- reading S4's output, timing the frames, and writing the
-result at `pose_storage.py`'s stage-output layout (issue #117) -- can be built and tested
-against a stand-in before a real model exists.
+result at `pose_storage.py`'s stage-output layout (issue #117) -- is testable against a
+stand-in.
 """
 
 from __future__ import annotations
@@ -32,7 +36,7 @@ from powerflow_pipeline.data.common.pose_storage import (
 from powerflow_pipeline.data.common.task_logging import log_task_paths
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig
 from powerflow_pipeline.data.preprocess.models import CameraRecord
-from powerflow_pipeline.data.preprocess.pose_model import PoseModel
+from powerflow_pipeline.data.preprocess.pose_model import Detector2D, to_pixel_only_series
 
 # Whose image space `model`'s pixel_position is drawn in -- S5 always reads S4's output.
 POSE_SOURCE_STAGE: Final[PipelineStage] = "s4_crop"
@@ -68,29 +72,15 @@ def _capture_start_epoch_ms(config: PreprocessConfig, record: CameraRecord) -> i
     return start_ms
 
 
-def _floor_offset_m(config: PreprocessConfig, record: CameraRecord) -> float:
-    """This camera's floor height above the optical centre, from S3's own sidecar.
-
-    `PlaneFit.floor_offset_m` is invariant under S3's rectifying rotation (a distance from the
-    origin doesn't change when the axes about that origin are rotated), so it's read straight
-    off S3's pre-rectification fit rather than recomputed here -- S5 has no floor region or
-    depth-selection logic of its own, only 4-retilt.md's.
-    """
-
-    sidecar_path = config.retilt_root / record.relative / "retilt_sidecar.json"
-    sidecar = json.loads(sidecar_path.read_text())
-    offset: float = sidecar["floor_offset_m"]
-    return offset
-
-
 @task(retries=1)
 def detect_pose_camera(
-    record: CameraRecord, config: PreprocessConfig, model: PoseModel
+    record: CameraRecord, config: PreprocessConfig, detector: Detector2D
 ) -> tuple[CameraRecord, StepResult]:
-    """Run `model` on one camera's S4 output and publish the resulting `PoseDocument`.
+    """Run `detector` on one camera's S4 output and publish the resulting 2D `PoseDocument`.
 
     `record` is S4's output record; like S4 Crop, everything S5 reads lives in the prior
-    stage's own output tree, except the capture's epoch anchor, which only S1 recorded.
+    stage's own output tree, except the capture's epoch anchor, which only S1 recorded. No
+    depth is read here at all -- that is S6 Lift.
     """
 
     assert config.pose_root is not None  # the caller checks this before looping cameras
@@ -105,15 +95,8 @@ def detect_pose_camera(
     if config.dry_run:
         return record, StepResult(file_ops=file_ops)
 
-    joints = model.predict(
-        rgb_path=source / "rgb.mp4",
-        n_frames=record.n_frames,
-        depth_dir=source / "depth",
-        confidence_dir=source / "confidence",
-        intrinsics=record.intrinsics,
-        rgb_size=(record.rgb_width, record.rgb_height),
-        depth_size=(record.depth_width, record.depth_height),
-        floor_offset_m=_floor_offset_m(config, record),
+    joints = to_pixel_only_series(
+        detector.detect(source / "rgb.mp4", record.n_frames), record.n_frames
     )
     frames = Frames(
         count=record.n_frames,

@@ -15,11 +15,11 @@ from typer.testing import CliRunner
 
 from powerflow_pipeline.data.cli import app
 from powerflow_pipeline.data.common.manifest import artifact_key
-from powerflow_pipeline.data.common.models import HUMAN_SKELETON, JointId, JointSeries
-from powerflow_pipeline.data.common.pose_storage import pose_path, skeleton_path
+from powerflow_pipeline.data.common.models import HUMAN_SKELETON, JointId
+from powerflow_pipeline.data.common.pose_storage import pose_path, read_pose, skeleton_path
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig
 from powerflow_pipeline.data.preprocess.flow import preprocess
-from powerflow_pipeline.data.preprocess.models import Intrinsics
+from powerflow_pipeline.data.preprocess.pose_model import JointPixelSeries
 from tests.conftest import MakeCamera
 
 
@@ -261,33 +261,25 @@ def test_the_cli_runs_the_flow(
     assert (s1 / "9 July" / "cnj_45kg_Set1" / "Front" / "cut_sidecar.json").is_file()
 
 
-# --- S5 pose (issue #116): opt-in, only when a `PoseModel` is supplied --------------------
+# --- S5 pose (issue #116) and S6 lift: each opt-in, and independently ---------------------
 
 
-class _StubPoseModel:
-    """A fixed, valid pose for every frame -- stands in for the real model (issue #118)."""
+class _StubDetector:
+    """A fixed, valid 2D detection for every frame -- stands in for a real `Detector2D`.
 
-    def predict(
-        self,
-        rgb_path: Path,
-        n_frames: int,
-        *,
-        depth_dir: Path,
-        confidence_dir: Path,
-        intrinsics: Intrinsics,
-        rgb_size: tuple[int, int],
-        depth_size: tuple[int, int],
-        floor_offset_m: float,
-    ) -> dict[JointId, JointSeries]:
-        series = JointSeries(
-            position=tuple((0.0, 0.0, 0.0) for _ in range(n_frames)),
+    The pixel is `(0, 0)`, the top-left corner, which the synthetic fixture gives usable depth,
+    so S6 can lift it.
+    """
+
+    def detect(self, rgb_path: Path, n_frames: int) -> dict[JointId, JointPixelSeries]:
+        series = JointPixelSeries(
             pixel_position=tuple((0, 0) for _ in range(n_frames)),
             confidence=tuple(0.9 for _ in range(n_frames)),
         )
         return {joint: series for joint in HUMAN_SKELETON.joints}
 
 
-def test_the_run_detects_pose_when_a_model_is_given(
+def test_the_run_detects_pose_when_a_detector_is_given(
     tmp_path: Path,
     make_camera: MakeCamera,
     make_meta_template: Any,
@@ -296,16 +288,74 @@ def test_the_run_detects_pose_when_a_model_is_given(
     raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
     config = make_config(tmp_path, raw, pose_root=tmp_path / "s5_pose_output")
 
-    manifest = preprocess(config, pose_model=_StubPoseModel())
+    manifest = preprocess(config, detector=_StubDetector())
 
     assert all("pose" in scan.steps for scan in manifest.scans)
+    assert all("lift" not in scan.steps for scan in manifest.scans)
     assert skeleton_path(config.pose_root).is_file()
     for scan in manifest.scans:
         date, session, camera = scan.scan_id.split("/", 2)
-        assert pose_path(config.pose_root, Path(date) / session, camera).is_file()
+        document = read_pose(pose_path(config.pose_root, Path(date) / session, camera))
+        # S5 stops in pixel space: no depth was read, so no positions were computed.
+        assert not document.has_positions
 
 
-def test_the_run_skips_pose_without_a_model(
+def test_the_run_lifts_pose_when_a_lift_root_is_given(
+    tmp_path: Path,
+    make_camera: MakeCamera,
+    make_meta_template: Any,
+    make_session_metadata: Any,
+) -> None:
+    raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
+    config = make_config(
+        tmp_path,
+        raw,
+        pose_root=tmp_path / "s5_pose_output",
+        lift_root=tmp_path / "s6_lift_output",
+    )
+
+    manifest = preprocess(config, detector=_StubDetector())
+
+    assert all("pose" in scan.steps and "lift" in scan.steps for scan in manifest.scans)
+    assert config.lift_root is not None
+    assert skeleton_path(config.lift_root).is_file()
+    for scan in manifest.scans:
+        date, session, camera = scan.scan_id.split("/", 2)
+        detected = read_pose(pose_path(config.pose_root, Path(date) / session, camera))
+        lifted = read_pose(pose_path(config.lift_root, Path(date) / session, camera))
+        assert not detected.has_positions
+        assert lifted.has_positions
+
+
+def test_s6_lifts_an_earlier_runs_detections_without_a_detector(
+    tmp_path: Path,
+    make_camera: MakeCamera,
+    make_meta_template: Any,
+    make_session_metadata: Any,
+) -> None:
+    """The point of splitting the stages: re-run the depth half without re-detecting."""
+
+    raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
+    detect_only = make_config(tmp_path, raw, pose_root=tmp_path / "s5_pose_output")
+    preprocess(detect_only, detector=_StubDetector())
+
+    lift_only = make_config(
+        tmp_path,
+        raw,
+        pose_root=tmp_path / "s5_pose_output",
+        lift_root=tmp_path / "s6_lift_output",
+        overwrite=True,
+    )
+    manifest = preprocess(lift_only)  # no detector at all
+
+    assert all("pose" not in scan.steps and "lift" in scan.steps for scan in manifest.scans)
+    assert lift_only.lift_root is not None
+    for scan in manifest.scans:
+        date, session, camera = scan.scan_id.split("/", 2)
+        assert read_pose(pose_path(lift_only.lift_root, Path(date) / session, camera)).has_positions
+
+
+def test_the_run_skips_pose_without_a_detector(
     tmp_path: Path,
     make_camera: MakeCamera,
     make_meta_template: Any,
@@ -319,7 +369,7 @@ def test_the_run_skips_pose_without_a_model(
     assert all("pose" not in scan.steps for scan in manifest.scans)
 
 
-def test_preprocess_rejects_a_pose_model_without_a_pose_root(
+def test_preprocess_rejects_a_detector_without_a_pose_root(
     tmp_path: Path,
     make_camera: MakeCamera,
     make_meta_template: Any,
@@ -329,7 +379,20 @@ def test_preprocess_rejects_a_pose_model_without_a_pose_root(
     config = make_config(tmp_path, raw)
 
     with pytest.raises(ValueError, match="pose_root"):
-        preprocess(config, pose_model=_StubPoseModel())
+        preprocess(config, detector=_StubDetector())
+
+
+def test_preprocess_rejects_a_lift_root_without_a_pose_root(
+    tmp_path: Path,
+    make_camera: MakeCamera,
+    make_meta_template: Any,
+    make_session_metadata: Any,
+) -> None:
+    raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
+    config = make_config(tmp_path, raw, lift_root=tmp_path / "s6_lift_output")
+
+    with pytest.raises(ValueError, match="nothing to lift"):
+        preprocess(config)
 
 
 # --- the single-camera layout, and a mixed raw root ---------------------------------------

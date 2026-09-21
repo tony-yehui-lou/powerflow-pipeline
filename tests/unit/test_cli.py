@@ -85,16 +85,22 @@ def test_preprocess_command_skips_pose_when_pose_flag_omitted(
     assert result.exit_code == 0, result.output
 
 
-def test_preprocess_command_accepts_pose_root_and_builds_a_pose_model(
+def test_preprocess_command_accepts_pose_root_and_builds_a_detector(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[str] = []
 
-    class _StubDetector:
+    class _BuiltDetector:
+        """Satisfies `Detector2D` structurally -- the flow's own parameter validation
+        rejects anything that doesn't, which is the contract worth asserting here."""
+
         def __init__(self) -> None:
             calls.append("detector-built")
 
-    monkeypatch.setattr("powerflow_pipeline.data.cli.MediaPipePoseDetector", _StubDetector)
+        def detect(self, rgb_path: Path, n_frames: int) -> dict[str, object]:
+            return {}
+
+    monkeypatch.setattr("powerflow_pipeline.data.cli.MediaPipePoseDetector", _BuiltDetector)
     raw = tmp_path / "raw"
     raw.mkdir()
 
@@ -121,3 +127,85 @@ def test_preprocess_command_accepts_pose_root_and_builds_a_pose_model(
 
     assert result.exit_code == 0, result.output
     assert calls == ["detector-built"]
+
+
+def _preprocess_args(tmp_path: Path, *extra: str) -> list[str]:
+    return [
+        "preprocess",
+        "--input",
+        str(tmp_path / "raw"),
+        "--records",
+        str(tmp_path / "s0"),
+        "--cut",
+        str(tmp_path / "s1"),
+        "--retilt",
+        str(tmp_path / "s3"),
+        "--crop",
+        str(tmp_path / "s4"),
+        "--output",
+        str(tmp_path / "s2"),
+        "--pose",
+        str(tmp_path / "s5"),
+        *extra,
+    ]
+
+
+class _StubDetector:
+    pass
+
+
+def _capture_flow_call(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any, Any]]:
+    """Record `(config, detector)` as the CLI hands them to the flow, running neither."""
+
+    calls: list[tuple[Any, Any]] = []
+
+    def _record(config: Any, detector: Any = None) -> Any:
+        calls.append((config, detector))
+        return type("Manifest", (), {"scans": [], "rejected_scans": []})()
+
+    monkeypatch.setattr("powerflow_pipeline.data.cli.MediaPipePoseDetector", _StubDetector)
+    monkeypatch.setattr("powerflow_pipeline.data.cli.preprocess_flow", _record)
+    return calls
+
+
+def test_pose_without_lift_runs_detection_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _capture_flow_call(monkeypatch)
+    (tmp_path / "raw").mkdir()
+
+    result = runner.invoke(app, _preprocess_args(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    config, detector = calls[0]
+    assert isinstance(detector, _StubDetector)
+    assert config.lift_root is None
+
+
+def test_lift_flag_enables_s6(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _capture_flow_call(monkeypatch)
+    (tmp_path / "raw").mkdir()
+
+    result = runner.invoke(app, _preprocess_args(tmp_path, "--lift", str(tmp_path / "s6")))
+
+    assert result.exit_code == 0, result.output
+    config, detector = calls[0]
+    assert config.lift_root == tmp_path / "s6"
+    assert isinstance(detector, _StubDetector)  # S5 still runs: --skip-detect was not given
+
+
+def test_skip_detect_builds_no_detector_so_s6_can_reuse_an_earlier_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _capture_flow_call(monkeypatch)
+    (tmp_path / "raw").mkdir()
+
+    result = runner.invoke(
+        app, _preprocess_args(tmp_path, "--lift", str(tmp_path / "s6"), "--skip-detect")
+    )
+
+    assert result.exit_code == 0, result.output
+    config, detector = calls[0]
+    assert detector is None  # no checkpoint is loaded at all
+    assert config.pose_root == tmp_path / "s5"  # still names the tree S6 reads
+    assert config.lift_root == tmp_path / "s6"

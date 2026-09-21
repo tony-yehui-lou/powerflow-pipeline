@@ -1,4 +1,4 @@
-"""The preprocess flow: S0 ingest, S1 cut, S2 orient, S3 retilt, S4 crop, S5 pose.
+"""The preprocess flow: S0 ingest, S1 cut, S2 orient, S3 retilt, S4 crop, S5 pose, S6 lift.
 
 Ordered orchestration only.
 
@@ -28,12 +28,13 @@ from powerflow_pipeline.data.preprocess.models import (
     CaptureUnit,
     CutInterval,
 )
-from powerflow_pipeline.data.preprocess.pose_model import PoseModel
+from powerflow_pipeline.data.preprocess.pose_model import Detector2D
 from powerflow_pipeline.data.preprocess.retilt import assess_plane_consistency
 from powerflow_pipeline.data.preprocess.tasks.crop import crop_camera
 from powerflow_pipeline.data.preprocess.tasks.cut import cut_camera, resolve_cut_interval
 from powerflow_pipeline.data.preprocess.tasks.discover import discover_captures
 from powerflow_pipeline.data.preprocess.tasks.ingest import ingest_camera
+from powerflow_pipeline.data.preprocess.tasks.lift import lift_pose_camera
 from powerflow_pipeline.data.preprocess.tasks.metadata import write_group_metadata
 from powerflow_pipeline.data.preprocess.tasks.orient import orient_camera
 from powerflow_pipeline.data.preprocess.tasks.pose import (
@@ -50,16 +51,19 @@ MIN_CAPTURES_FOR_CONSISTENCY = 3
 
 
 @flow(name=PIPELINE)
-def preprocess(config: PreprocessConfig, pose_model: PoseModel | None = None) -> RunManifest:
+def preprocess(config: PreprocessConfig, detector: Detector2D | None = None) -> RunManifest:
     """Ingest, cut to the shared lift window, and rotate to portrait. Or reject, with a reason.
 
-    S5 Pose runs after S4 Crop for every surviving camera, but only when `pose_model` is
-    given -- a real model is issue #118, still open, so every existing caller that doesn't
-    pass one gets exactly today's S0-S4 behaviour.
+    S5 Pose runs after S4 Crop for every surviving camera, but only when `detector` is given,
+    so every existing caller that doesn't pass one gets exactly today's S0-S4 behaviour. S6
+    Lift then runs only when `config.lift_root` is set, independently of S5: the two stages
+    communicate through S5's published document, not in memory.
     """
 
-    if pose_model is not None and config.pose_root is None:
-        raise ValueError("pose_model was given but config.pose_root is unset")
+    if detector is not None and config.pose_root is None:
+        raise ValueError("detector was given but config.pose_root is unset")
+    if config.lift_root is not None and config.pose_root is None:
+        raise ValueError("config.lift_root is set but config.pose_root is unset: nothing to lift")
 
     context = RunContext.create(
         pipeline=PIPELINE,
@@ -76,9 +80,14 @@ def preprocess(config: PreprocessConfig, pose_model: PoseModel | None = None) ->
         dry_run=context.dry_run,
     )
 
-    if pose_model is not None and not config.dry_run:
-        assert config.pose_root is not None  # checked above
-        ensure_skeleton_published(config.pose_root, overwrite=config.overwrite)
+    if not config.dry_run:
+        # Each pose tree is self-describing: joint names mean nothing without the topology
+        # they were captured against, so every root that holds a pose document gets one.
+        if detector is not None:
+            assert config.pose_root is not None  # checked above
+            ensure_skeleton_published(config.pose_root, overwrite=config.overwrite)
+        if config.lift_root is not None:
+            ensure_skeleton_published(config.lift_root, overwrite=config.overwrite)
 
     discovery = discover_captures(config.raw_root)
     manifest.rejected_scans.extend(discovery.rejected)
@@ -138,12 +147,19 @@ def preprocess(config: PreprocessConfig, pose_model: PoseModel | None = None) ->
                     + crop_step.file_ops
                 )
 
-                if pose_model is not None:
-                    _, pose_step = detect_pose_camera(crop_record, config, pose_model)
+                if detector is not None:
+                    _, pose_step = detect_pose_camera(crop_record, config, detector)
                     steps.append("pose")
                     derived = {**derived, **pose_step.derived}
                     warnings = warnings + pose_step.warnings
                     file_ops = file_ops + pose_step.file_ops
+
+                if config.lift_root is not None:
+                    _, lift_step = lift_pose_camera(crop_record, config)
+                    steps.append("lift")
+                    derived = {**derived, **lift_step.derived}
+                    warnings = warnings + lift_step.warnings
+                    file_ops = file_ops + lift_step.file_ops
             except ScanRejected as rejection:
                 manifest.rejected_scans.append(
                     RejectedScan(

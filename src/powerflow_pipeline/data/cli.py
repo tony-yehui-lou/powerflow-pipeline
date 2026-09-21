@@ -7,13 +7,36 @@ from typing import Annotated
 
 import typer
 
-from powerflow_pipeline.data.preprocess.config import PreprocessConfig, RotationDirection
-from powerflow_pipeline.data.preprocess.depth_pose_model import DepthBackedPoseModel
+from powerflow_pipeline.data.preprocess.config import (
+    PoseDetector,
+    PreprocessConfig,
+    RotationDirection,
+    RTMPoseVariant,
+)
 from powerflow_pipeline.data.preprocess.flow import preprocess as preprocess_flow
 from powerflow_pipeline.data.preprocess.mediapipe_pose_detector import MediaPipePoseDetector
-from powerflow_pipeline.data.preprocess.pose_model import PoseModel
+from powerflow_pipeline.data.preprocess.pose_model import Detector2D
 
 app = typer.Typer(help="PowerFlow data pipelines.", no_args_is_help=True)
+
+
+def _build_detector(config: PreprocessConfig) -> Detector2D:
+    """The 2D detector `config.pose_detector` selects.
+
+    `rtmpose_detector` is imported lazily: it pulls in `rtmlib`/`onnxruntime`, and a run that
+    never asks for RTMPose should not pay for loading them.
+    """
+
+    if config.pose_detector is PoseDetector.RTMPOSE:
+        from powerflow_pipeline.data.preprocess.rtmpose_detector import RTMPoseDetector
+
+        return RTMPoseDetector(
+            config.rtmpose_variant.value,
+            det_frequency=config.rtmpose_det_frequency,
+            clavicle_shoulder_weight=config.rtmpose_clavicle_shoulder_weight,
+            use_depth_for_subject=config.rtmpose_subject_depth,
+        )
+    return MediaPipePoseDetector()
 
 
 @app.callback()
@@ -46,9 +69,58 @@ def preprocess(
         Path | None,
         typer.Option(
             "--pose",
-            help="Where S5 publishes detected poses. Omit to skip S5 entirely.",
+            help=(
+                "Where S5 publishes detected 2D poses. Omit to skip S5; give it without "
+                "--lift to detect joints without back-projecting them."
+            ),
         ),
     ] = None,
+    lift_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--lift",
+            help=(
+                "Where S6 publishes poses lifted to floor-frame metres using LiDAR depth. "
+                "Omit to skip S6. Reads S5's published document, so it can lift an earlier "
+                "run's detections without re-running the detector."
+            ),
+        ),
+    ] = None,
+    skip_detect: Annotated[
+        bool,
+        typer.Option(
+            "--skip-detect",
+            help=(
+                "Don't run S5; reuse the poses already published under --pose. Use with "
+                "--lift to redo the depth back-projection without re-running the detector."
+            ),
+        ),
+    ] = False,
+    pose_detector: Annotated[
+        PoseDetector,
+        typer.Option("--pose-detector", help="Which 2D keypoint model S5 runs."),
+    ] = PoseDetector.MEDIAPIPE,
+    rtmpose_variant: Annotated[
+        RTMPoseVariant,
+        typer.Option("--rtmpose-variant", help="RTMPose speed/accuracy tier."),
+    ] = RTMPoseVariant.BALANCED,
+    rtmpose_det_frequency: Annotated[
+        int,
+        typer.Option(
+            "--rtmpose-det-frequency",
+            help="Run RTMPose's person detector every Nth frame, tracking in between.",
+        ),
+    ] = 1,
+    rtmpose_subject_depth: Annotated[
+        bool,
+        typer.Option(
+            "--rtmpose-subject-depth/--no-rtmpose-subject-depth",
+            help=(
+                "Let S5 read depth to pick which person is the athlete (never to place a "
+                "joint). --no-rtmpose-subject-depth makes S5 read no depth at all."
+            ),
+        ),
+    ] = True,
     only: Annotated[
         str | None,
         typer.Option(
@@ -91,18 +163,25 @@ def preprocess(
         crop_root=crop_root,
         output_root=output_root,
         pose_root=pose_root,
+        lift_root=lift_root,
+        skip_detect=skip_detect,
+        pose_detector=pose_detector,
+        rtmpose_variant=rtmpose_variant,
+        rtmpose_det_frequency=rtmpose_det_frequency,
+        rtmpose_subject_depth=rtmpose_subject_depth,
         only=only,
         rotation=rotation,
         dry_run=dry_run,
         overwrite=overwrite,
     )
-    # `MediaPipePoseDetector()` loads (downloading on first use) the pretrained model
-    # bundle, so it's only constructed when S5 is actually requested.
-    pose_model: PoseModel | None = None
-    if pose_root is not None:
-        pose_model = DepthBackedPoseModel(MediaPipePoseDetector())
+    # A detector loads (downloading on first use) its pretrained checkpoints, so one is only
+    # constructed when S5 is actually requested. S6 needs none: it reads S5's published
+    # document, which is what makes `--lift` alone a valid way to re-run just the depth half.
+    detector: Detector2D | None = None
+    if pose_root is not None and not skip_detect:
+        detector = _build_detector(config)
 
-    manifest = preprocess_flow(config, pose_model=pose_model)
+    manifest = preprocess_flow(config, detector=detector)
     typer.echo(
         f"processed {len(manifest.scans)} camera(s), rejected {len(manifest.rejected_scans)}"
     )
