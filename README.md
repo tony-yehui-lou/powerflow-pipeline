@@ -10,10 +10,14 @@ operator `metadata.yaml` sits — there is no layout flag:
 
 | | two-camera session | single-camera capture |
 |---|---|---|
-| Raw shape | `<date>/<session>/<camera>/` streams | `<date>/<liftType>/<trial>/` streams |
+| Raw shape | `<date>/<session>/<camera>/` streams | `<date>/<liftType>/<trial>/` streams, or just `<date>/<trial>/` |
 | `metadata.yaml` | at the **session**, shared | **inside** the capture |
 | Roles | `front`, `side` from the directory name | `single` |
 | Cut interval owner | the `side` camera | the capture itself |
+
+The lift-type folder (`Snch`, `CnJ`) in the single-camera shape is only ever used to *infer*
+the lift type for `metadata.py`'s derived fields — discovery itself doesn't care whether it's
+there, so `<date>/<trial>/` (no lift-type folder) and `<date>/<liftType>/<trial>/` both work.
 
 Output **mirrors the raw path exactly**, so a stage tree has whatever depth its raw counterpart
 has. A *role* is only a lookup key for which `metadata.yaml` fields a capture reads; it says
@@ -109,16 +113,151 @@ Prefect database. Nothing is written to a real Prefect server.
 
 ---
 
+## Writing `metadata.yaml`
+
+Every capture needs an operator-annotated `metadata.yaml`: **inside** the capture for a
+single-camera trial, or **shared at the session** (one level up) for a two-camera session.
+Two fields are load-bearing — S1 Cut and S3 Retilt reject the camera without them. Everything
+else in the file (`weight_in_kg`, `type`, `result`, `dateTime_epoch`, the whole `athlete:`
+block) is **never read by the pipeline**; it's carried through to the audit trail as
+informational only (and the stage output's own `athlete:` block is always empty — nothing in
+the capture supplies those values).
+
+Single-camera example:
+
+```yaml
+lift:
+  lift_start_time_side_in_ms: 31100   # REQUIRED (S1): ms into the raw rgb.mp4 where the lift starts
+  lift_end_time_side_in_ms: 38330     # REQUIRED (S1): ms into the raw rgb.mp4 where it ends
+  weight_in_kg: 50.0                  # informational only, not read
+  type: snch                          # informational only, not read
+  result: success                     # informational only, not read
+athlete:                              # informational only, not read
+  name: string
+  height_in_cm: 180.0
+  ...
+video:
+  floor_region_bottom_left_in_pixels: (0.20, 0.78)  # REQUIRED (S3): normalized (x, y)
+  floor_region_top_right_in_pixels: (0.55, 0.68)    # normalized (x, y)
+```
+
+A two-camera session's shared file instead prefixes the lift window and floor region by role,
+since one file governs both cameras:
+
+```yaml
+lift:
+  lift_start_time_side_in_ms: 31100   # always "_side_", even though this is the shared file
+  lift_end_time_side_in_ms: 38330
+video:
+  front_floor_region_bottom_left_in_pixels: (x0, y0)
+  front_floor_region_top_right_in_pixels:   (x1, y1)
+  side_floor_region_bottom_left_in_pixels:  (x0, y0)
+  side_floor_region_top_right_in_pixels:    (x1, y1)
+```
+
+### Measuring the lift window
+
+Open the **raw** `rgb.mp4` — the `Side` camera's, for a two-camera session — and read the
+player timestamp where the lift starts and ends, in milliseconds from the start of that file.
+S1 Cut rejects the group if:
+
+- either field is missing, non-numeric, or negative
+- `lift_start_time_side_in_ms >= lift_end_time_side_in_ms`
+- the resulting interval falls outside the camera's own recording
+
+A window under 1 second only warns — a real snatch can be that fast.
+
+### Measuring the floor region
+
+Measure on **S2's portrait output** (`data/s2_orient_output/<capture>/rgb.mp4`), not the raw
+landscape video — S3 applies the rectangle to S2's rotated depth/confidence frames, and the
+raw frame is a different orientation. Coordinates are normalized `[0, 1]`: `x` left→right,
+`y` **top→bottom** (`y=0` top of frame), written as parenthesised strings (`(0.20, 0.78)`,
+not a YAML list). `bottom_left`'s `y` must be numerically larger than `top_right`'s — S3
+rejects a region where that's reversed.
+
+Pick a patch that is:
+- flat floor, not a riser, mat edge, or anything else at a different height
+- clear of feet, plates, and bystanders during roughly the **first 5 seconds** of the cut clip
+  (S3 samples every 10th frame, up to 32 frames)
+- close enough to the camera for the LiDAR to return clean depth
+
+A region that looks fine by eye can still fail: on 22 August, the previous default rectangle
+sat on a PA speaker cabinet in the foreground rather than the floor, and every capture that
+used it failed S3's plane-fit RMS check even though nothing about the YAML itself was wrong.
+
+Workflow for a day whose camera position hasn't been measured yet: run once through S4 (below)
+with whatever placeholder region is in the file, open the resulting S2 `rgb.mp4`, measure the
+real rectangle, write it into the **raw** `metadata.yaml`, then rerun just that capture with
+`--only '<date>/<trial>' --overwrite` — S1 and S2 are cheap to redo.
+
+### Checklist before a run
+
+- [ ] Both `lift_start_time_side_in_ms` and `lift_end_time_side_in_ms` are this capture's own
+      values, not copied from another trial (a copy-pasted window is accepted silently — S1 has
+      no way to tell it's wrong, it just cuts the wrong few seconds).
+- [ ] The floor region was measured on this camera's own S2 output, not inherited from a
+      previous day's tripod position.
+- [ ] A two-camera session's shared file has both `front_` and `side_` prefixed pairs.
+
+---
+
 ## Run the pipeline
+
+There is no flag to stop early: every run does S0 Ingest → S1 Cut → S2 Orient → S3 Retilt →
+S4 Crop, and adding `--pose` appends S5 Pose on top. If S3 or S4 rejects a camera, its earlier
+stage outputs (S2, S3) are already published and are not rolled back — only the rejected
+stage's output is missing.
+
+### Recipe A — through S4 Crop
+
+```bash
+cd powerflow-pipeline
+uv sync
+
+uv run powerflow preprocess \
+  --input   ../data/raw \
+  --records ../data/s0_ingest_output \
+  --cut     ../data/s1_cut_output \
+  --output  ../data/s2_orient_output \
+  --retilt  ../data/s3_retilt_output \
+  --crop    ../data/s4_crop_output \
+  --only    '10 September/*' \
+  --dry-run
+```
+
+Drop `--dry-run` once it reports what you expect.
+
+### Recipe B — through S5 Pose
+
+Same as Recipe A, plus `--pose`:
 
 ```bash
 uv run powerflow preprocess \
   --input   ../data/raw \
   --records ../data/s0_ingest_output \
   --cut     ../data/s1_cut_output \
+  --output  ../data/s2_orient_output \
   --retilt  ../data/s3_retilt_output \
-  --output  ../data/s2_orient_output
+  --crop    ../data/s4_crop_output \
+  --pose    ../data/s5_pose_output \
+  --only    '10 September/*' \
+  --dry-run
 ```
+
+This re-runs S0–S4 too — S5 isn't a separate pass over existing S4 output, it's the same flow
+with one more stage attached. Optionally choose the 2D detector:
+
+```bash
+--pose-detector rtmpose --rtmpose-variant balanced   # default: --pose-detector mediapipe
+```
+
+The first run against a given detector/variant downloads its pretrained weights into
+`models_cache/` (git-ignored) — expect network access on that first run only. S5 writes one
+`pose.json` per surviving camera plus a single `skeleton.human-v2.json` at the pose root's top
+level, describing the joint topology every `pose.json` under it shares.
+
+### Flags
 
 | Flag | Meaning |
 |---|---|
@@ -127,6 +266,10 @@ uv run powerflow preprocess \
 | `--cut` | Where S1 publishes the trimmed, time-aligned landscape streams. |
 | `--output` | Where S2 publishes the rotated portrait streams. |
 | `--retilt` | Where S3 publishes the rectified, floor-levelled streams. |
+| `--crop` | Where S4 publishes the cropped streams. |
+| `--pose` | Where S5 publishes detected 2D poses. Omit to skip S5 entirely. |
+| `--pose-detector` | `mediapipe` (default) or `rtmpose`. |
+| `--rtmpose-variant` | `lightweight`, `balanced` (default), or `performance` — only with `--pose-detector rtmpose`. |
 | `--only` | Process only captures whose id matches this glob, e.g. `'22 August/Snch/*'`. Keep a two-camera session whole — see below. |
 | `--rotation` | `cw` (default) or `ccw`. |
 | `--dry-run` | Validate and plan, write nothing. |
@@ -144,8 +287,9 @@ uv run powerflow preprocess ... --only '22 August/Snch/110kgSnch1'  # a single-c
 ```
 
 A full run over the four cameras in `data/raw/9 July` takes on the order of **10+ minutes** — it
-decodes, cuts, rotates, retilts, and re-encodes ~22k frames three times — and produces several GB
-across all four stage outputs.
+decodes, cuts, rotates, retilts, crops, and re-encodes ~22k frames four times — and produces
+several GB across all four stage outputs. Adding `--pose` adds a detector pass over S4's RGB on
+top of that.
 
 There is no `--in-place` mode. It would rewrite the raw capture, and raw data is write-once: each
 stage publishes to its own output root instead.
@@ -161,14 +305,18 @@ stage publishes to its own output root instead.
 | Trimmed landscape streams + provenance | `<--cut>/<capture path>/` incl. `cut_sidecar.json` | S1 |
 | Portrait streams + provenance | `<--output>/<capture path>/` incl. `sidecar.json` | S2 |
 | Floor-levelled portrait streams + provenance | `<--retilt>/<capture path>/` incl. `retilt_sidecar.json` | S3 |
+| Cropped streams + provenance | `<--crop>/<capture path>/` | S4 |
+| 2D pose document | `<--pose>/<capture path>/pose.json`, plus `<--pose>/skeleton.human-v2.json` once per run | S5 |
 
 `<capture path>` is the capture's raw-relative path — `11 July/30kg_Set1/Front` or
 `22 August/Snch/110kgSnch1` — so every stage tree matches its raw counterpart byte for byte in
 path shape.
 
-Every stage output root gets its own byte-identical copy of `metadata.yaml`, so a consumer of one
-stage never has to reach back into an earlier stage's tree to learn which lift the pixels came from.
-A new stage adds its root to `PreprocessConfig.stage_roots` and inherits the copy.
+Every stage output root **through S4** gets its own byte-identical copy of `metadata.yaml`, so a
+consumer of one stage never has to reach back into an earlier stage's tree to learn which lift the
+pixels came from. S5's `--pose` root deliberately does **not** get one: unlike S0–S4 it doesn't
+run for every camera in every run, so copying it there would leave orphaned files with no pose
+output beside them whenever a camera is skipped or `--pose` is omitted.
 
 The **manifest is the audit record for one run**: every camera processed, the values derived
 (rotation applied, `k_rewritten`, frame counts, cut epoch bounds), any warnings, and **every
