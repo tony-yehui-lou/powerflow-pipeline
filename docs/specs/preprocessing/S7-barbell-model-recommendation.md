@@ -2,6 +2,14 @@
 
 Status: **draft** | Scope: GitHub issue [#121](https://github.com/tony-yehui-lou/PowerFlow/issues/121) "Find a suitable model", under epic [#59](https://github.com/tony-yehui-lou/PowerFlow/issues/59) "Barbell Detection" | Updated: 2026-10-16
 
+> **Superseded in part, 2026-10-19.** The detection target is no longer the plate face: it is the
+> bar's own **cap** and **collar**, hand-labelled as boxes on sampled frames rather than tracked
+> with SAM 2. What was built, what it measured, and why both changed is in
+> [`S7-barbell-landmark-detection.md`](S7-barbell-landmark-detection.md). This document stands as
+> the decision record for what did not change — detecting the bar rather than the athlete, refusing
+> to learn subject identity, taking metric scale from a known bar dimension rather than LiDAR — and
+> for the licensing and alternatives analysis behind the model choice.
+
 ## Executive Summary
 
 S7 Barbell needs to turn one camera's S4-cropped RGB video into the `bar` block the UI contract
