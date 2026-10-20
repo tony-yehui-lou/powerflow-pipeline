@@ -12,7 +12,7 @@ from typing import Any, Final
 from powerflow_pipeline.data.common.errors import PublishError
 from powerflow_pipeline.data.common.models import SKELETON_ID, PoseDocument, skeleton_document
 
-POSE_OUTPUT_DIR: Final = "s5_pose_output"
+POSE_OUTPUT_DIR: Final = "s6_pose_output"
 POSE_FILENAME: Final = "pose.json"
 
 

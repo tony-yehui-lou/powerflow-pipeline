@@ -1,7 +1,7 @@
-"""S5 · Pose detection -> runs an injected 2D detector on S4's cropped RGB and publishes one
+"""S6 · Pose detection -> runs an injected 2D detector on S4's cropped RGB and publishes one
 `PoseDocument` per camera (docs/spec, GitHub issue #116).
 
-S5 stops in pixel space. The metric lift to floor-frame metres is S6 Lift, a separate stage
+S6 stops in pixel space. The metric lift to floor-frame metres is S7 Lift, a separate stage
 reading this stage's output, so the two can be re-run independently: detection is the expensive
 half and depth sampling is the half still being revised.
 
@@ -38,7 +38,7 @@ from powerflow_pipeline.data.preprocess.config import PreprocessConfig
 from powerflow_pipeline.data.preprocess.models import CameraRecord
 from powerflow_pipeline.data.preprocess.pose_model import Detector2D, to_pixel_only_series
 
-# Whose image space `model`'s pixel_position is drawn in -- S5 always reads S4's output.
+# Whose image space `model`'s pixel_position is drawn in -- S6 always reads S4's output.
 POSE_SOURCE_STAGE: Final[PipelineStage] = "s4_crop"
 
 
@@ -62,7 +62,7 @@ def _frame_offsets_ms(rgb_path: Path) -> list[int]:
 def _capture_start_epoch_ms(config: PreprocessConfig, record: CameraRecord) -> int:
     """The true epoch of frame 0, from the `cut_sidecar.json` S1 wrote for this camera.
 
-    Later stages don't carry epoch time forward -- they don't need it, only S5 does -- so this
+    Later stages don't carry epoch time forward -- they don't need it, only S6 does -- so this
     reaches back to S1's own output tree rather than something copied down the pipeline.
     """
 
@@ -78,9 +78,9 @@ def detect_pose_camera(
 ) -> tuple[CameraRecord, StepResult]:
     """Run `detector` on one camera's S4 output and publish the resulting 2D `PoseDocument`.
 
-    `record` is S4's output record; like S4 Crop, everything S5 reads lives in the prior
+    `record` is S4's output record; like S4 Crop, everything S6 reads lives in the prior
     stage's own output tree, except the capture's epoch anchor, which only S1 recorded. No
-    depth is read here at all -- that is S6 Lift.
+    depth is read here at all -- that is S7 Lift.
     """
 
     assert config.pose_root is not None  # the caller checks this before looping cameras

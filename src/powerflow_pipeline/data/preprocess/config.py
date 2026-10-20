@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 
 class PoseDetector(StrEnum):
-    """Which 2D keypoint model S5 Pose runs (S5-rtmpose-migration.md §7)."""
+    """Which 2D keypoint model S6 Pose runs (S6-rtmpose-migration.md §7)."""
 
     MEDIAPIPE = "mediapipe"
     RTMPOSE = "rtmpose"
@@ -44,27 +44,27 @@ class PreprocessConfig(BaseModel):
     retilt_root: Path
     crop_root: Path
     output_root: Path
-    # S5 Pose is optional -- unset until a `PoseModel` (issue #118) is wired in at the flow
+    # S6 Pose is optional -- unset until a `PoseModel` (issue #118) is wired in at the flow
     # call site. `preprocess()` skips the stage entirely when `pose_model` isn't given, so
     # this stays unset for every existing caller.
     pose_root: Path | None = None
-    # S6 Lift is optional in the same way, and independently: it reads S5's published document
-    # rather than S5's in-memory result, so a run can detect without lifting (while the depth
+    # S7 Lift is optional in the same way, and independently: it reads S6's published document
+    # rather than S6's in-memory result, so a run can detect without lifting (while the depth
     # sampler is being revised) or lift an earlier run's detections without re-detecting.
     # Unset skips the stage; setting it without `pose_root` is rejected, since there would be
     # nothing to lift.
     lift_root: Path | None = None
-    # Reuse whatever S5 already published in `pose_root` instead of re-running detection.
-    # `pose_root` names the S5 tree either way -- written when S5 runs, read when it doesn't --
+    # Reuse whatever S6 already published in `pose_root` instead of re-running detection.
+    # `pose_root` names the S6 tree either way -- written when S6 runs, read when it doesn't --
     # so lifting an earlier run's detections is `skip_detect` plus a `lift_root`.
     skip_detect: bool = False
-    # S5 Pose's 2D detector. MediaPipe stays the default until RTMPose beats it on the
-    # measurements in docs/specs/preprocessing/S5-rtmpose-migration.md §6; both stay installed
+    # S6 Pose's 2D detector. MediaPipe stays the default until RTMPose beats it on the
+    # measurements in docs/specs/preprocessing/S6-rtmpose-migration.md §6; both stay installed
     # and selectable so the comparison can be run, and so neither becomes load-bearing.
     pose_detector: PoseDetector = PoseDetector.MEDIAPIPE
-    # Half-width of the depth patch S6 medians around each joint pixel, in depth pixels. 2
-    # gives the 5x5 box S5 used before the split. One depth pixel spans ~7.5 RGB pixels, so
-    # this is already wider than a forearm -- see S5-bone-constrained-reconstruction.md.
+    # Half-width of the depth patch S7 medians around each joint pixel, in depth pixels. 2
+    # gives the 5x5 box S6 used before the split. One depth pixel spans ~7.5 RGB pixels, so
+    # this is already wider than a forearm -- see S6-bone-constrained-reconstruction.md.
     lift_patch_radius: int = Field(default=2, ge=0)
     rtmpose_variant: RTMPoseVariant = RTMPoseVariant.BALANCED
     # Run the person detector every Nth frame and track in between (§3). 1 re-detects every
@@ -73,9 +73,9 @@ class PreprocessConfig(BaseModel):
     rtmpose_det_frequency: int = Field(default=1, ge=1)
     # Where a clavicle sits along the neck -> shoulder line (§2); 0.5 is the collarbone midpoint.
     rtmpose_clavicle_shoulder_weight: float = Field(default=0.5, ge=0.0, le=1.0)
-    # Whether S5 may read depth to pick *which person* is the athlete (§4 rule 1). This never
-    # produces a coordinate -- it returns an index -- but it is the one place S5 opens a depth
-    # frame at all. False makes S5 purely pixel-space, falling back to largest-bounding-box
+    # Whether S6 may read depth to pick *which person* is the athlete (§4 rule 1). This never
+    # produces a coordinate -- it returns an index -- but it is the one place S6 opens a depth
+    # frame at all. False makes S6 purely pixel-space, falling back to largest-bounding-box
     # selection, which is worse only on captures that actually contain bystanders.
     rtmpose_subject_depth: bool = True
     # Restrict the run to capture ids matching this glob. A capture day is hours of
@@ -133,7 +133,7 @@ class PreprocessConfig(BaseModel):
         which lift they came from, and a consumer should not have to reach back into an
         earlier stage's tree to find out. A new stage adds its root here and inherits the copy.
 
-        S5 Pose deliberately does not: unlike S0-S4, it doesn't run for every camera in every
+        S6 Pose deliberately does not: unlike S0-S4, it doesn't run for every camera in every
         run (see `pose_root`), so it would leave orphan `metadata.yaml` files with no pose
         output beside them whenever it's unset or a camera is skipped.
         """

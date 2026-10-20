@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Label the barbell itself -- the whole bar as one object -- with refinement until it holds.
 
-The subject of S7 is the bar, not the plates: a bar looks the same whatever is loaded on it and
+The subject of S5 is the bar, not the plates: a bar looks the same whatever is loaded on it and
 whatever gym it is in, where a bumper changes colour between plates and a gym floor is covered in
 other bumpers. Bar ends come from the mask's extremes along its own axis, so no separate sleeve
 detection is needed.
@@ -34,7 +34,7 @@ Review phase (after the first propagation):
     w                    write the result
     q                    quit without writing
 
-See docs/specs/preprocessing/S7-barbell-annotation-guide.md.
+See docs/specs/preprocessing/S5-barbell-annotation-guide.md.
 """
 
 from __future__ import annotations
@@ -409,7 +409,7 @@ def main() -> int:
                 "prompts": prompts.as_json(),
                 "suspect_frames_at_write": suspect_frames(masks),
                 "written_at": datetime.now(UTC).isoformat(),
-                "guide": "docs/specs/preprocessing/S7-barbell-annotation-guide.md",
+                "guide": "docs/specs/preprocessing/S5-barbell-annotation-guide.md",
             },
             indent=2,
         )

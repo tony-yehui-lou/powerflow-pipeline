@@ -205,7 +205,7 @@ real rectangle, write it into the **raw** `metadata.yaml`, then rerun just that 
 ## Run the pipeline
 
 There is no flag to stop early: every run does S0 Ingest → S1 Cut → S2 Orient → S3 Retilt →
-S4 Crop, and adding `--pose` appends S5 Pose on top. If S3 or S4 rejects a camera, its earlier
+S4 Crop, and adding `--pose` appends S6 Pose on top. If S3 or S4 rejects a camera, its earlier
 stage outputs (S2, S3) are already published and are not rolled back — only the rejected
 stage's output is missing.
 
@@ -228,7 +228,7 @@ uv run powerflow preprocess \
 
 Drop `--dry-run` once it reports what you expect.
 
-### Recipe B — through S5 Pose
+### Recipe B — through S6 Pose
 
 Same as Recipe A, plus `--pose`:
 
@@ -240,12 +240,12 @@ uv run powerflow preprocess \
   --output  ../data/s2_orient_output \
   --retilt  ../data/s3_retilt_output \
   --crop    ../data/s4_crop_output \
-  --pose    ../data/s5_pose_output \
+  --pose    ../data/s6_pose_output \
   --only    '10 September/*' \
   --dry-run
 ```
 
-This re-runs S0–S4 too — S5 isn't a separate pass over existing S4 output, it's the same flow
+This re-runs S0–S4 too — S6 isn't a separate pass over existing S4 output, it's the same flow
 with one more stage attached. Optionally choose the 2D detector:
 
 ```bash
@@ -253,7 +253,7 @@ with one more stage attached. Optionally choose the 2D detector:
 ```
 
 The first run against a given detector/variant downloads its pretrained weights into
-`models_cache/` (git-ignored) — expect network access on that first run only. S5 writes one
+`models_cache/` (git-ignored) — expect network access on that first run only. S6 writes one
 `pose.json` per surviving camera plus a single `skeleton.human-v2.json` at the pose root's top
 level, describing the joint topology every `pose.json` under it shares.
 
@@ -267,7 +267,7 @@ level, describing the joint topology every `pose.json` under it shares.
 | `--output` | Where S2 publishes the rotated portrait streams. |
 | `--retilt` | Where S3 publishes the rectified, floor-levelled streams. |
 | `--crop` | Where S4 publishes the cropped streams. |
-| `--pose` | Where S5 publishes detected 2D poses. Omit to skip S5 entirely. |
+| `--pose` | Where S6 publishes detected 2D poses. Omit to skip S6 entirely. |
 | `--pose-detector` | `mediapipe` (default) or `rtmpose`. |
 | `--rtmpose-variant` | `lightweight`, `balanced` (default), or `performance` — only with `--pose-detector rtmpose`. |
 | `--only` | Process only captures whose id matches this glob, e.g. `'22 August/Snch/*'`. Keep a two-camera session whole — see below. |
@@ -306,7 +306,7 @@ stage publishes to its own output root instead.
 | Portrait streams + provenance | `<--output>/<capture path>/` incl. `sidecar.json` | S2 |
 | Floor-levelled portrait streams + provenance | `<--retilt>/<capture path>/` incl. `retilt_sidecar.json` | S3 |
 | Cropped streams + provenance | `<--crop>/<capture path>/` | S4 |
-| 2D pose document | `<--pose>/<capture path>/pose.json`, plus `<--pose>/skeleton.human-v2.json` once per run | S5 |
+| 2D pose document | `<--pose>/<capture path>/pose.json`, plus `<--pose>/skeleton.human-v2.json` once per run | S6 |
 
 `<capture path>` is the capture's raw-relative path — `11 July/30kg_Set1/Front` or
 `22 August/Snch/110kgSnch1` — so every stage tree matches its raw counterpart byte for byte in
@@ -314,7 +314,7 @@ path shape.
 
 Every stage output root **through S4** gets its own byte-identical copy of `metadata.yaml`, so a
 consumer of one stage never has to reach back into an earlier stage's tree to learn which lift the
-pixels came from. S5's `--pose` root deliberately does **not** get one: unlike S0–S4 it doesn't
+pixels came from. S6's `--pose` root deliberately does **not** get one: unlike S0–S4 it doesn't
 run for every camera in every run, so copying it there would leave orphaned files with no pose
 output beside them whenever a camera is skipped or `--pose` is omitted.
 

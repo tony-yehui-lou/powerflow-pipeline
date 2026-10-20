@@ -1,10 +1,10 @@
-# S5 Pose — migrating the 2D detector to RTMPose
+# S6 Pose — migrating the 2D detector to RTMPose
 
-Status: **draft** | Derived from: `S5-pose-model-recommendation.md` (issue [#118](https://github.com/tony-yehui-lou/PowerFlow/issues/118)) | Updated: 2026-09-19
+Status: **draft** | Derived from: `S6-pose-model-recommendation.md` (issue [#118](https://github.com/tony-yehui-lou/PowerFlow/issues/118)) | Updated: 2026-09-19
 
 ## Purpose
 
-Replace S5 Pose's 2D keypoint detector — today MediaPipe/BlazePose — with RTMPose, run through
+Replace S6 Pose's 2D keypoint detector — today MediaPipe/BlazePose — with RTMPose, run through
 [`rtmlib`](https://github.com/Tau-J/rtmlib), while leaving the rest of the stage untouched:
 
 ```text
@@ -33,7 +33,7 @@ them tunable:
 - **Head/torso-anchored detection.** BlazePose's detector stage descends from BlazeFace. An
   athlete bent double, facing away, head tucked between the arms — the entire first half of a
   snatch or clean — is a weak anchor.
-- **Per-frame independence.** S5 runs it in `IMAGE` mode, so every frame is a fresh guess with
+- **Per-frame independence.** S6 runs it in `IMAGE` mode, so every frame is a fresh guess with
   no continuity across the clip.
 
 RTMPose is top-down: a generic person detector proposes boxes for *every* person, then pose is
@@ -96,7 +96,7 @@ adds an explicit **head**, **neck** and hip-centre point, and both of the extras
 
 Neither skeleton has true clavicles, so those two joints remain derived. This is inherent to
 every 2D keypoint model and is not resolvable within this architecture (see
-`S5-pose-model-recommendation.md` for the body-model alternatives that do have them).
+`S6-pose-model-recommendation.md` for the body-model alternatives that do have them).
 
 ### 2.1 Joint mapping
 
@@ -131,7 +131,7 @@ of each lift.
 - `det_frequency` is a config parameter. Lower values re-detect more often (more robust to track
   drift, slower); higher values lean on tracking.
 - **Track loss is recorded, not hidden.** A frame where the tracker holds no subject emits the
-  same all-`None`/zero-confidence series the current detector does — S5 must never interpolate a
+  same all-`None`/zero-confidence series the current detector does — S6 must never interpolate a
   position it did not observe.
 - rtmlib documents no temporal smoothing. Smoothing (OneEuro, Savitzky-Golay) is **out of scope**
   for this migration: it changes stored values rather than recovering missing ones, and belongs
@@ -232,7 +232,7 @@ partly on AI Challenger, whose terms are likewise unclear.
 
 For the current research use this is acceptable. **It is a blocker if PowerFlow is ever
 commercialised**, and the swap would then have to be revisited — so the detector must remain
-selectable rather than becoming load-bearing. `S5-pose-model-recommendation.md` previously
+selectable rather than becoming load-bearing. `S6-pose-model-recommendation.md` previously
 described these weights as "Apache-2.0 licensed end to end (code and released weights)"; that
 claim is wrong and is corrected here.
 

@@ -244,3 +244,14 @@ Pure geometry is kept separate from I/O and built test-first:
   overhead-hold B residual above ("~−50") was read off a few frames by eye. With B's own rest
   offset measured and subtracted, the median over 290–370 is **+85 mm** (A: −91). The two are
   symmetric, which is why draft 5 calls the hold ambiguous.
+
+---
+
+## Renumbering note (2026-10-20)
+
+Stages were renumbered so the barbell detector runs before pose: **S7 Barbell → S5**, **S5 Pose →
+S6**, **S6 Lift → S7**. This draft is frozen, so its text still uses the old numbers. Read every
+"S7" above as S5, "S5" as S6, and "S6" as S7.
+
+Its files were renamed `S7-*.md` → `S5-*.md`, and `S5-*.md` → `S6-*.md` for the pose specs. Links
+above that use the old names point to the files of the same name with the new prefix.

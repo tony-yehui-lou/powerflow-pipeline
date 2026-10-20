@@ -1,4 +1,4 @@
-# S7 Barbell — Human Annotation Guide
+# S5 Barbell — Human Annotation Guide
 
 Status: **current method** | Scope: the labelling half of [#121](https://github.com/tony-yehui-lou/PowerFlow/issues/121) | Updated: 2026-10-19
 
@@ -6,7 +6,7 @@ How to produce the cap/collar dataset by hand. Written to be followed literally,
 version of you that comes back to this in three months.
 
 What the labels are for, and what was measured with them, is in
-[`S7-barbell-landmark-detection.md`](S7-barbell-landmark-detection.md). An earlier revision of this
+[`S5-barbell-landmark-detection.md`](S5-barbell-landmark-detection.md). An earlier revision of this
 guide described tracking **plates** with SAM 2 propagation; that method was replaced and the
 reasons are recorded in §6 of that document.
 

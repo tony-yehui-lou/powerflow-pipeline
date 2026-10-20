@@ -183,3 +183,14 @@ Pure geometry is kept separate from I/O and built test-first:
     pull, overhead, and near camera height. That is *more* than the cap end's own 19 mm geometric
     drop. Yaw is off by 1.6–10° per degree.
   - §4's "~4 mm per degree at the centre" estimate is therefore wrong by a factor of ~6.
+
+---
+
+## Renumbering note (2026-10-20)
+
+Stages were renumbered so the barbell detector runs before pose: **S7 Barbell → S5**, **S5 Pose →
+S6**, **S6 Lift → S7**. This draft is frozen, so its text still uses the old numbers. Read every
+"S7" above as S5, "S5" as S6, and "S6" as S7.
+
+Its files were renamed `S7-*.md` → `S5-*.md`, and `S5-*.md` → `S6-*.md` for the pose specs. Links
+above that use the old names point to the files of the same name with the new prefix.

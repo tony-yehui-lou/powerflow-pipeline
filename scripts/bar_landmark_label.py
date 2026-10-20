@@ -55,7 +55,7 @@ Each box carries its class, so one pass produces both.
 
 Re-running resumes: frames already decided are skipped unless --redo.
 
-See docs/specs/preprocessing/S7-barbell-annotation-guide.md.
+See docs/specs/preprocessing/S5-barbell-annotation-guide.md.
 """
 
 from __future__ import annotations
@@ -284,7 +284,7 @@ def main() -> int:
                     "fps": fps,
                     "boxes": {str(k): v for k, v in sorted(done.items())},
                     "written_at": datetime.now(UTC).isoformat(),
-                    "guide": "docs/specs/preprocessing/S7-barbell-annotation-guide.md",
+                    "guide": "docs/specs/preprocessing/S5-barbell-annotation-guide.md",
                 },
                 indent=2,
             )

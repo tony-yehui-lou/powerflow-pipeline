@@ -425,10 +425,10 @@ Not edited above; recorded here and carried into the successor document.
    camera's, ~45° off the lifter's sagittal plane — while its vertical axis is sound. Anything
    downstream that reads horizontal bar displacement as sagittal will be wrong by an
    unrecorded factor and will look plausible. The successor adds an explicit `frame_azimuth`
-   field and an operator-declared `view` annotation, and names S6 Yaw alignment as the
+   field and an operator-declared `view` annotation, and names S7 Yaw alignment as the
    follow-up.
 
-4. **§8's S5 note is incomplete.** `CameraName = Literal["Side", "Front"]` makes
+4. **§8's S6 note is incomplete.** `CameraName = Literal["Side", "Front"]` makes
    `PoseDocument` reject any August capture id at runtime (pydantic, not just `mypy`). That is
    a required change, not a downstream concern.
 

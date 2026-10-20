@@ -18,7 +18,7 @@ and out of frame, so every plate is propagated frame by frame like the subject's
 
 Objects 1 and 2 are the subject's bar plates, by convention: `subject_object_ids` in the run
 record keys off it, and every downstream consumer reads that rather than guessing. The detector
-never sees the distinction -- see docs/specs/preprocessing/S7-barbell-model-recommendation.md C3.
+never sees the distinction -- see docs/specs/preprocessing/S5-barbell-model-recommendation.md C3.
 
 Controls (in the click window):
     left click      positive point on the plate under the cursor
@@ -36,7 +36,7 @@ Output (write-once, refuses to clobber):
     ../data/annotations/barbell/v1/<capture>/sam2_run.json       clicks, model, subject ids
     ../data/annotations/barbell/v1/<capture>/overlay.mp4         for eyeballing before Pass B
 
-See docs/specs/preprocessing/S7-barbell-annotation-guide.md §3.
+See docs/specs/preprocessing/S5-barbell-annotation-guide.md §3.
 """
 
 from __future__ import annotations
@@ -439,7 +439,7 @@ def main() -> int:
                     for obj_id in tracked
                 },
                 "written_at": datetime.now(UTC).isoformat(),
-                "guide": "docs/specs/preprocessing/S7-barbell-annotation-guide.md",
+                "guide": "docs/specs/preprocessing/S5-barbell-annotation-guide.md",
             },
             indent=2,
         )

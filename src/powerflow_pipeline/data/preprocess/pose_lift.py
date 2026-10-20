@@ -1,13 +1,13 @@
-"""S6 Lift's core: give S5's pixel-space joints floor-frame metric positions from LiDAR depth.
+"""S7 Lift's core: give S6's pixel-space joints floor-frame metric positions from LiDAR depth.
 
 This is the second half of what `depth_pose_model.DepthBackedPoseModel` used to do in one pass
 with detection. Separating them makes the expensive half (detection) and the half still under
 active revision (depth sampling) independently re-runnable -- see
-docs/specs/preprocessing/S5-bone-constrained-reconstruction.md, which changes only this side.
+docs/specs/preprocessing/S6-bone-constrained-reconstruction.md, which changes only this side.
 
 The per-pixel geometry lives in `pose_geometry.py`; this module is the per-joint, per-frame loop
 over it plus the depth/confidence frame reads, and nothing else. It uses real LiDAR depth for
-scale, never a learned monocular estimate -- see S5-pose-model-recommendation.md for why.
+scale, never a learned monocular estimate -- see S6-pose-model-recommendation.md for why.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ def lift_joint_series(
     floor_offset_m: float,
     patch_radius: int = DEFAULT_PATCH_RADIUS,
 ) -> dict[JointId, JointSeries]:
-    """S5's 2D series, plus a floor-frame position wherever depth supports one.
+    """S6's 2D series, plus a floor-frame position wherever depth supports one.
 
     `joints` is expected to be pixel-only (`position is None`); a series that already carries
     positions is rejected rather than silently relifted, since the second lift would be reading
@@ -85,9 +85,9 @@ def lift_joint_series(
             )
             if point is None:
                 # `JointSeries` requires position and pixelPosition to drop out together, and a
-                # zero confidence wherever position is None -- so a joint S5 detected but whose
+                # zero confidence wherever position is None -- so a joint S6 detected but whose
                 # depth is unusable (occlusion, out of LiDAR range) loses its pixel here too.
-                # S5's own document keeps that pixel; this is the loss the bone-constrained
+                # S6's own document keeps that pixel; this is the loss the bone-constrained
                 # reconstruction spec exists to recover, and the reason the stages are split.
                 pixels[joint][frame_index] = None
                 confidences[joint][frame_index] = 0.0

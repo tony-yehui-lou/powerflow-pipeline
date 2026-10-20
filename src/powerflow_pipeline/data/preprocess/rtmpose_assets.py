@@ -1,4 +1,4 @@
-"""Fetches RTMPose's ONNX checkpoints on demand (S5-rtmpose-migration.md §7).
+"""Fetches RTMPose's ONNX checkpoints on demand (S6-rtmpose-migration.md §7).
 
 Mirrors `mediapipe_assets.py`: pinned URLs per variant (never `latest`), a minimum-size check,
 and an atomic rename so a truncated download is never mistaken for a valid model. Downloads
@@ -25,7 +25,7 @@ from typing import Literal
 RTMPoseVariant = Literal["lightweight", "balanced", "performance"]
 
 # Halpe-26 (BodyWithFeet) detector + pose checkpoints, per variant. YOLOX is the person
-# detector; it is Apache-2.0 (S5-rtmpose-migration.md §8).
+# detector; it is Apache-2.0 (S6-rtmpose-migration.md §8).
 _MODEL_URLS: dict[RTMPoseVariant, dict[str, str]] = {
     "lightweight": {
         "det": (

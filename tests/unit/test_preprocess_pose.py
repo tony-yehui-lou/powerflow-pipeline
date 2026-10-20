@@ -1,4 +1,4 @@
-"""S5 · Pose detection -> runs an injected model on S4's cropped RGB and publishes one
+"""S6 · Pose detection -> runs an injected model on S4's cropped RGB and publishes one
 `PoseDocument` per camera. The model itself (issue #118) is stubbed here; this covers the
 plumbing that connects S4's output to `pose_storage.py`'s stage-output layout (issue #117).
 """
@@ -31,7 +31,7 @@ from tests.unit.test_preprocess_ingest import make_config as _base_make_config
 def make_config(tmp_path: Path, **overrides: object) -> PreprocessConfig:
     # Sized for the synthetic fixture's tiny frame, same as the crop tests.
     overrides.setdefault("crop_safety_px", 1)
-    overrides.setdefault("pose_root", tmp_path / "s5_pose_output")
+    overrides.setdefault("pose_root", tmp_path / "s6_pose_output")
     return _base_make_config(tmp_path, **overrides)
 
 
@@ -189,19 +189,19 @@ def test_detect_pose_camera_overwrites_when_configured(
 
 
 def test_ensure_skeleton_published_writes_once(tmp_path: Path) -> None:
-    pose_root = tmp_path / "s5"
+    pose_root = tmp_path / "s6"
     path = ensure_skeleton_published(pose_root, overwrite=False)
     assert path.is_file()
 
 
 def test_ensure_skeleton_published_is_idempotent_without_overwrite(tmp_path: Path) -> None:
-    pose_root = tmp_path / "s5"
+    pose_root = tmp_path / "s6"
     first = ensure_skeleton_published(pose_root, overwrite=False)
     second = ensure_skeleton_published(pose_root, overwrite=False)  # does not raise
     assert first == second
 
 
 def test_ensure_skeleton_published_rewrites_when_overwrite_is_set(tmp_path: Path) -> None:
-    pose_root = tmp_path / "s5"
+    pose_root = tmp_path / "s6"
     ensure_skeleton_published(pose_root, overwrite=False)
     ensure_skeleton_published(pose_root, overwrite=True)  # does not raise

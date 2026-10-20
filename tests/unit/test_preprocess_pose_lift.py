@@ -1,6 +1,6 @@
-"""`lift_joint_series`: S6's metric lift, against real depth PNGs on disk.
+"""`lift_joint_series`: S7's metric lift, against real depth PNGs on disk.
 
-No detector here -- the lift takes S5's published `JointSeries`, so this isolates the depth
+No detector here -- the lift takes S6's published `JointSeries`, so this isolates the depth
 back-projection and JointSeries reassembly it actually owns (CLAUDE.md: TDD, synthetic
 fixtures). Previously the same coverage sat on `DepthBackedPoseModel`, which combined this with
 detection before the stages were split.
@@ -43,7 +43,7 @@ def _write_depth_confidence(
 def _detected(
     pixels: tuple[tuple[int, int] | None, ...], confidence: tuple[float, ...]
 ) -> dict[JointId, JointSeries]:
-    """One 2D-only `JointSeries` per skeleton joint, as S5 publishes them."""
+    """One 2D-only `JointSeries` per skeleton joint, as S6 publishes them."""
 
     return {
         joint: JointSeries(position=None, pixel_position=pixels, confidence=confidence)
@@ -106,7 +106,7 @@ def test_a_frame_with_no_detected_pixel_stays_dropped_out(tmp_path: Path) -> Non
 def test_unusable_depth_forces_the_frame_to_drop_out_even_with_a_confident_pixel(
     tmp_path: Path,
 ) -> None:
-    # Zero depth everywhere: S5 found a pixel, but there's nothing to back-project.
+    # Zero depth everywhere: S6 found a pixel, but there's nothing to back-project.
     depth_dir, confidence_dir = _write_depth_confidence(
         tmp_path, 1, size=(100, 100), depth_mm=0, confidence=2
     )
@@ -115,7 +115,7 @@ def test_unusable_depth_forces_the_frame_to_drop_out_even_with_a_confident_pixel
     series = _lift(joints, depth_dir, confidence_dir, floor_offset_m=1.8)["rightKnee"]
 
     # JointSeries's own invariant: position/pixelPosition drop out together, confidence 0. This
-    # is the loss S5's own document does *not* suffer, which is why the stages are separable.
+    # is the loss S6's own document does *not* suffer, which is why the stages are separable.
     assert series.position is not None
     assert series.position[0] is None
     assert series.pixel_position[0] is None

@@ -91,7 +91,7 @@ def build(captures: list[str], docs: dict[str, dict[str, Any]]) -> dict[str, Any
         "info": {
             "description": "PowerFlow barbell landmarks (cap, collar)",
             "created": datetime.now(UTC).isoformat(),
-            "guide": "docs/specs/preprocessing/S7-barbell-annotation-guide.md",
+            "guide": "docs/specs/preprocessing/S5-barbell-annotation-guide.md",
         },
         "images": images,
         "annotations": annotations,

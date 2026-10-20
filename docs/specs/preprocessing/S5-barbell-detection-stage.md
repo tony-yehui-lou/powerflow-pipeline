@@ -1,4 +1,4 @@
-# S7 Barbell Detection — a Prefect stage, and the stage registry it lands on
+# S5 Barbell Detection — a Prefect stage, and the stage registry it lands on
 
 Status: **draft** | Scope: issue [#121](https://github.com/tony-yehui-lou/PowerFlow/issues/121) under epic [#59](https://github.com/tony-yehui-lou/PowerFlow/issues/59); consumed by [#63](https://github.com/tony-yehui-lou/PowerFlow/issues/63) | Updated: 2026-10-19
 
@@ -6,28 +6,31 @@ Status: **draft** | Scope: issue [#121](https://github.com/tony-yehui-lou/PowerF
 
 Two things:
 
-- **Make the S7 cap/collar detector a pipeline stage.** It is described in
-  [`S7-barbell-landmark-detection.md`](S7-barbell-landmark-detection.md) and today runs as
+- **Make the S5 cap/collar detector a pipeline stage.** It is described in
+  [`S5-barbell-landmark-detection.md`](S5-barbell-landmark-detection.md) and today runs as
   `scripts/predict_landmarks.py` against one capture at a time. As a stage it runs inside the
   `preprocess` Prefect flow, for every capture, with its output published, audited in the run
   manifest, and reproducible from a named checkpoint.
 - **Make adding the *next* stage, before or after it, a configuration change rather than a flow
   rewrite.**
 
-The second goal shapes the first. S7 is therefore specified as the first stage built on a small
+The second goal shapes the first. S5 is therefore specified as the first stage built on a small
 **stage registry**, not as an eighth hand-wired block in `flow.py`.
 
 ```text
-S0 Ingest → S1 Cut → S2 Orient → S3 Retilt → S4 Crop ─┬→ S5 Pose → S6 Lift
-                                                       └→ S7 Barbell ─→ (S8 Bar Pose, later)
-          └──────────── core: unchanged ─────────────┘   └──── registry stages ────┘
+S0 Ingest → S1 Cut → S2 Orient → S3 Retilt → S4 Crop → S5 Barbell → S6 Pose → S7 Lift → (S8 Bar Pose, later)
+└──────────────── core: unchanged ────────────────┘   └─────────────── registry stages ───────────────┘
 ```
+
+The barbell detector runs first among the registry stages, so a later stage (S8, or a wrist fix
+reading both S5 and S6) finds its output already published. S5 and S6 do not read each other: both
+read only S4.
 
 ---
 
 ## 1. What adding a stage costs today
 
-Adding S5 and S6 touched these places:
+Adding S6 and S7 touched these places:
 
 | # | Edit | Where |
 |---|---|---|
@@ -37,12 +40,12 @@ Adding S5 and S6 touched these places:
 | 4 | A `None` check to enable the stage, plus cross-checks (`lift_root` without `pose_root`) | `preprocess/flow.py` |
 | 5 | Its own block merging `steps` / `derived` / `warnings` / `file_ops` | `preprocess/flow.py` |
 | 6 | A one-off flag to reuse published output instead of rerunning (`skip_detect`) | config + CLI + flow |
-| 7 | A deployment parameter. S5 and S6 never got one, so the `preprocess` deployment cannot run them | `prefect.yaml` |
+| 7 | A deployment parameter. S6 and S7 never got one, so the `preprocess` deployment cannot run them | `prefect.yaml` |
 
 Inserting a stage *between* two others also means re-reading every downstream block to check
 what it reads in memory.
 
-The rule this spec adopts already half-exists. S6 reads S5's **published document**, never its
+The rule this spec adopts already half-exists. S7 reads S6's **published document**, never its
 in-memory result, and that is why the two can be rerun independently. This spec makes that rule
 universal for registry stages.
 
@@ -64,12 +67,12 @@ exporting one `StageSpec`:
 
 ```python
 # preprocess/stages/base.py
-StageId = str  # "s7_barbell"; also the default output dir name: <data_root>/<id>_output
+StageId = str  # "s5_barbell"; also the default output dir name: <data_root>/<id>_output
 
 @dataclass(frozen=True)
 class StageSpec(Generic[S, R]):
     id: StageId
-    title: str                                    # "S7 Barbell detection", for logs and the manifest
+    title: str                                    # "S5 Barbell detection", for logs and the manifest
     settings: type[S]                             # the stage's own pydantic model (§3.3)
     reads: Callable[[S], tuple[StageId, ...]]     # trees it opens, given its settings (§4)
     setup: Callable[[S, RunContext], R] | None    # once per run: load a model, open a session
@@ -101,8 +104,8 @@ class StageInput:
 REGISTRY: dict[StageId, StageSpec] = {
     spec.id: spec
     for spec in (
-        s7_barbell.SPEC,
-        # s5_pose.SPEC, s6_lift.SPEC  ← phase 2 (§8)
+        s5_barbell.SPEC,
+        # s6_pose.SPEC, s7_lift.SPEC  ← phase 2 (§8)
     )
 }
 ```
@@ -138,8 +141,8 @@ core:
   # … every existing S0–S4 tunable, unchanged in name and default
 
 stages:                     # registry stages, run in this order, after the core
-  - id: s7_barbell
-    checkpoint: ../data/models/s7_barbell/frcnn-v2-2026-10-19.pt
+  - id: s5_barbell
+    checkpoint: ../data/models/s5_barbell/frcnn-v2-2026-10-19.pt
 ```
 
 `stages` is the whole switchboard:
@@ -154,7 +157,7 @@ The pipeline already follows `../data/{task}_output`. The registry makes it the 
 | Stage | Default root |
 |---|---|
 | `s4_crop` | `<data_root>/s4_crop_output` |
-| `s7_barbell` | `<data_root>/s7_barbell_output` |
+| `s5_barbell` | `<data_root>/s5_barbell_output` |
 | any new `sN_name` | `<data_root>/sN_name_output` |
 
 A stage entry may set `root:` to override this. Core roots keep their existing fields (`crop_root`
@@ -180,9 +183,9 @@ A few generic flags replace per-stage flags:
 
 ```bash
 powerflow preprocess --config runs/preprocess.yaml
-powerflow preprocess --config runs/preprocess.yaml --set s7_barbell.score_threshold=0.5
+powerflow preprocess --config runs/preprocess.yaml --set s5_barbell.score_threshold=0.5
 powerflow preprocess --config runs/preprocess.yaml --no-core --only "10 September/45kg1"
-powerflow preprocess --config runs/preprocess.yaml --stages s7_barbell
+powerflow preprocess --config runs/preprocess.yaml --stages s5_barbell
 ```
 
 | Flag | Effect |
@@ -201,39 +204,39 @@ phase 2 as aliases that write into the same config, so no existing recipe breaks
 
 ### 3.5 Worked examples
 
-**Run S7 alone over captures that are already cropped:**
+**Run S5 alone over captures that are already cropped:**
 
 ```yaml
 core: {run: false}
 stages:
-  - id: s7_barbell
-    checkpoint: ../data/models/s7_barbell/frcnn-v2-2026-10-19.pt
+  - id: s5_barbell
+    checkpoint: ../data/models/s5_barbell/frcnn-v2-2026-10-19.pt
 ```
 
-**Insert a hypothetical stage *before* S7**, e.g. `s4b_deblur`, which publishes sharpened RGB.
-Add it to the list and point S7 at it. Nothing else changes:
+**Insert a hypothetical stage *before* S5**, e.g. `s4b_deblur`, which publishes sharpened RGB.
+Add it to the list and point S5 at it. Nothing else changes:
 
 ```yaml
 stages:
   - id: s4b_deblur
-  - id: s7_barbell
-    input: s4b_deblur         # S7 now reads s4b_deblur's rgb.mp4 instead of s4_crop's
+  - id: s5_barbell
+    input: s4b_deblur         # S5 now reads s4b_deblur's rgb.mp4 instead of s4_crop's
     checkpoint: …
 ```
 
-**Add a stage *after* S7**, e.g. `s8_bar_pose`: the Bar Height geometry moving out of powerflow-ui
-into the pipeline (§9). It declares `reads = ("s7_barbell", "s4_crop", "s3_retilt")`, and is
-listed after S7:
+**Add a stage *after* S5**, e.g. `s8_bar_pose`: the Bar Height geometry moving out of powerflow-ui
+into the pipeline (§9). It declares `reads = ("s5_barbell", "s4_crop", "s3_retilt")`, and is
+listed after S5:
 
 ```yaml
 stages:
-  - id: s7_barbell
+  - id: s5_barbell
     checkpoint: …
   - id: s8_bar_pose
     min_score: 0.5
 ```
 
-**Rerun only S8 against S7's published output:**
+**Rerun only S8 against S5's published output:**
 
 ```bash
 powerflow preprocess --config runs/preprocess.yaml --no-core --stages s8_bar_pose
@@ -245,16 +248,16 @@ Before anything runs, the flow resolves the plan and refuses a bad one with a me
 what to change. For each listed stage, in order:
 
 1. **The id is known.**
-   > `stages[1]: unknown stage 's7_barbel'; known: s7_barbell, …`
+   > `stages[1]: unknown stage 's5_barbel'; known: s5_barbell, …`
 2. **Its settings validate** against the stage's model.
-   > `s7_barbell.score_threshold: must be in [0, 1], got 3`
+   > `s5_barbell.score_threshold: must be in [0, 1], got 3`
 3. **Every id in `reads(settings)` is satisfiable:**
    - it is a core stage with `core.run: true`; or
    - it is a registry stage listed *earlier* in this run; or
    - its root exists on disk.
 
    Otherwise:
-   > `s7_barbell reads s4b_deblur, which is neither listed before it nor published at ../data/s4b_deblur_output`
+   > `s5_barbell reads s4b_deblur, which is neither listed before it nor published at ../data/s4b_deblur_output`
 4. **No stage is listed twice, and no two stages share a root.**
 
 `setup` is called only after the whole plan validates. A typo in stage 3 never costs the minutes
@@ -297,7 +300,7 @@ processed yet. The rest of the run is unchanged.
   declares.
 - **Captures are independent:** one capture's failure never stops another's.
 
-## 6. S7 Barbell detection
+## 6. S5 Barbell detection
 
 ### 6.1 What it does
 
@@ -315,13 +318,13 @@ It does no geometry. Pairing, scale and height belong to a later stage (§9).
 `reads = (settings.input, "s1_cut")`:
 - **`<input>/<relative>/rgb.mp4`**, default `s4_crop`. Its image space is the one the boxes are
   drawn in, and is recorded as `stage` in the output.
-- **`s1_cut/<relative>/cut_sidecar.json`**, for the capture's epoch anchor. This is exactly how S5
+- **`s1_cut/<relative>/cut_sidecar.json`**, for the capture's epoch anchor. This is exactly how S6
   obtains it (`tasks/pose.py: _capture_start_epoch_ms`); the two helpers move to `common/` and both
   stages use them.
 
 ### 6.3 The model boundary
 
-S5's pattern is reused: the stage calls a protocol, and the torchvision model is one implementation.
+S6's pattern is reused: the stage calls a protocol, and the torchvision model is one implementation.
 
 ```python
 # preprocess/barbell_model.py
@@ -359,7 +362,7 @@ and manifest.
 
 ### 6.4 Output
 
-Published at `<s7_barbell root>/<relative>/`:
+Published at `<s5_barbell root>/<relative>/`:
 
 | File | When | What |
 |---|---|---|
@@ -385,7 +388,7 @@ Published at `<s7_barbell root>/<relative>/`:
   },
   "detector": {
     "architecture": "fasterrcnn_resnet50_fpn_v2",
-    "checkpoint": "../data/models/s7_barbell/frcnn-v2-2026-10-19.pt",
+    "checkpoint": "../data/models/s5_barbell/frcnn-v2-2026-10-19.pt",
     "checkpointSha256": "…",
     "trainingEpoch": 6,
     "scoreThreshold": 0.3,
@@ -424,7 +427,7 @@ Bar Height drops below 0.5. A higher value would destroy evidence that a consume
 | `render_overlay` | `false` | also publish `overlay.mp4` |
 | `warn_cap_coverage` | `0.5` | warn when fewer than this fraction of frames have a cap |
 | `warn_collar_coverage` | `0.9` | likewise for the collar |
-| `root` | `<data_root>/s7_barbell_output` | override the output root |
+| `root` | `<data_root>/s5_barbell_output` | override the output root |
 
 ### 6.6 Publish, overwrite, dry run
 
@@ -438,13 +441,13 @@ These follow the existing rules in `common/filesystem.py`:
 
 ### 6.7 Manifest
 
-All of these are under the `s7_barbell.` prefix:
+All of these are under the `s5_barbell.` prefix:
 - **`derived`:** `frames`, `frames_with_cap`, `frames_with_collar`, `frames_with_both`, median cap
   and collar score, seconds per frame, `checkpoint_sha256`, `device`.
 - **`warnings`:** coverage below the `warn_*` thresholds, and frames where every detection fell
   under the threshold.
 - **Never a rejection for low coverage.** 45kg1 shows a cap on only a quarter of its frames, and is
-  still valid S7 output.
+  still valid S5 output.
 
 ### 6.8 Retries and cost
 
@@ -460,7 +463,7 @@ Today the only checkpoint sits in a training run directory
 pipeline stage should name a **model**, not a training run. Proposed:
 
 ```text
-../data/models/s7_barbell/
+../data/models/s5_barbell/
   frcnn-v2-2026-10-19.pt        # copied once from the chosen run; never written again
   frcnn-v2-2026-10-19.json      # architecture, classes, training run, split, val metrics (§5 of the landmark spec)
 ```
@@ -469,18 +472,18 @@ Promotion is a deliberate copy by hand or by a script, matching the data rule "w
 task". The stage then reads `.json` beside the `.pt` for `architecture` and records both in
 provenance.
 
-## 8. Phase 2 — S5 and S6 onto the registry
+## 8. Phase 2 — S6 and S7 onto the registry
 
-This is not required for S7, but it is the reason the registry is worth having.
+This is not required for S5, but it is the reason the registry is worth having.
 
-- **S5 Pose** becomes `stages/s5_pose.py`.
+- **S6 Pose** becomes `stages/s6_pose.py`.
   - Its settings model absorbs `pose_detector`, `rtmpose_variant`, `rtmpose_det_frequency`,
     `rtmpose_clavicle_shoulder_weight` and `rtmpose_subject_depth`, without the prefixes.
   - `setup` builds the detector; that code moves from `cli.py: _build_detector`.
   - `ensure_skeleton_published` becomes part of `setup`.
-- **S6 Lift** becomes `stages/s6_lift.py`, with `reads = ("s5_pose", "s4_crop")`.
-- **`skip_detect` disappears.** Lifting an earlier run's detections is `stages: [s6_lift]`, with
-  `s5_pose` satisfied from disk by §4 rule 3.
+- **S7 Lift** becomes `stages/s7_lift.py`, with `reads = ("s6_pose", "s4_crop")`.
+- **`skip_detect` disappears.** Lifting an earlier run's detections is `stages: [s7_lift]`, with
+  `s6_pose` satisfied from disk by §4 rule 3.
 - **Old flags stay as aliases** (`--pose`, `--lift`, `--skip-detect`), mapped onto `stages:`, for
   one release.
 
@@ -488,14 +491,14 @@ This is not required for S7, but it is the reason the registry is worth having.
 
 - **`scripts/predict_landmarks.py`** becomes a thin wrapper that runs the stage on one capture with
   `render_overlay: true`, or is retired. Its output location moves from `annotations/barbell/v3/`
-  (a labelled corpus, which inference should not write into) to `s7_barbell_output/`.
-- **powerflow-ui's `build_bar_height.py`** reads `s7_barbell_output/<relative>/barbell.json`
+  (a labelled corpus, which inference should not write into) to `s5_barbell_output/`.
+- **powerflow-ui's `build_bar_height.py`** reads `s5_barbell_output/<relative>/barbell.json`
   instead of `predictions.json`.
   - The change is small: per-frame arrays instead of a dict, and `frames.tMs` instead of `i/fps`.
   - It also gets real timing for free.
   - That is a UI-repo change, made when this lands.
 - **S8 Bar Pose (future).** The level-bar geometry now in `build_bar_height.py` becomes a registry
-  stage with `reads = ("s7_barbell", "s4_crop", "s3_retilt")`, listed after S7. This spec is the
+  stage with `reads = ("s5_barbell", "s4_crop", "s3_retilt")`, listed after S5. This spec is the
   registry it would be added to, and §3.5 is its config.
 
 ## 10. Testing
@@ -508,9 +511,9 @@ TDD, as the repo requires; the coverage gate stays at 90%. None of these tests i
 | ordering | stages run in list order; a stage listed before its dependency is rejected unless the dependency is on disk |
 | config layering | file < `--set` < legacy alias; `--stages` keeps file settings; roots default to `<data_root>/<id>_output` |
 | `--no-core` | S0–S4 tasks are not called; captures with a missing input tree are skipped with a warning |
-| S7 stage, stub detector | document shape, arrays `frames.count` long, `null` placement, `tMs` from PTS, `stage`/`pixelSpace` from the input tree |
-| S7 publish | staging then publish; existing output skipped without `overwrite`, replaced with it; dry run writes nothing and never calls `setup` |
-| S7 manifest | derived keys prefixed; coverage warnings at the thresholds; low coverage never rejects |
+| S5 stage, stub detector | document shape, arrays `frames.count` long, `null` placement, `tMs` from PTS, `stage`/`pixelSpace` from the input tree |
+| S5 publish | staging then publish; existing output skipped without `overwrite`, replaced with it; dry run writes nothing and never calls `setup` |
+| S5 manifest | derived keys prefixed; coverage warnings at the thresholds; low coverage never rejects |
 | top-1 rule | given several detections per class, the highest-scoring one above threshold is kept |
 | `barbell_model.build_model` | every registered architecture builds with the replaced head (moved from the script's existing check) |
 | one real-model smoke test | marked `slow`, skipped by default; one short clip through the real checkpoint |
@@ -525,7 +528,7 @@ TDD, as the repo requires; the coverage gate stays at 90%. None of these tests i
    as aliases.
 4. **Move `MODELS` / `build_model` to `preprocess/barbell_model.py`;** the training script imports
    them. Add `BarbellDetector`.
-5. **`stages/s7_barbell.py`** against a stub detector, then `TorchvisionBarbellDetector`.
+5. **`stages/s5_barbell.py`** against a stub detector, then `TorchvisionBarbellDetector`.
 6. **Move the epoch and PTS helpers from `tasks/pose.py` to `common/`.**
 7. **Run on `10 September`; compare with today's `predictions.json`** on 50kg3. Boxes should match
    to rounding, given the same checkpoint.
@@ -536,7 +539,7 @@ TDD, as the repo requires; the coverage gate stays at 90%. None of these tests i
 1. **Add `torchvision` as a runtime dependency.** `torch` already is; `predict_landmarks.py` gets
    torchvision today through `uv run --with torchvision --with pillow`. Pillow is not needed by
    the stage, since frames come from PyAV. The repo rule is to ask before adding a dependency.
-2. **The checkpoint home.** `../data/models/s7_barbell/` as in §7, or keep pointing into
+2. **The checkpoint home.** `../data/models/s5_barbell/` as in §7, or keep pointing into
    `annotations/.../runs/`.
 3. **The run file's home.** `runs/*.yaml` in the pipeline repo (versioned, reviewable recipes) is
    proposed.
@@ -547,6 +550,6 @@ TDD, as the repo requires; the coverage gate stays at 90%. None of these tests i
 - **Retraining, or changing the detector's classes.**
 - **Bar geometry** (pairing, scale, height): that is S8, specified separately.
 - **Moving S0–S4 onto the registry.** Their group-level and day-level coupling needs its own design.
-- **The preprocess metadata task dropping `barbell_type`** (landmark spec §7). S7 doesn't need it,
+- **The preprocess metadata task dropping `barbell_type`** (landmark spec §7). S5 doesn't need it,
   but S8 will.
-- **Concurrency across captures.** One model per run, captures sequential, as S5 runs today.
+- **Concurrency across captures.** One model per run, captures sequential, as S6 runs today.

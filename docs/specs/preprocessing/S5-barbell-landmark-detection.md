@@ -1,9 +1,9 @@
-# S7 Barbell — Landmark Detection, As Built
+# S5 Barbell — Landmark Detection, As Built
 
 Status: **implemented, first model trained** | Scope: GitHub issue [#121](https://github.com/tony-yehui-lou/PowerFlow/issues/121) under epic [#59](https://github.com/tony-yehui-lou/PowerFlow/issues/59) | Updated: 2026-10-19
 
 This records what was actually built and measured, and supersedes the target and labelling method
-proposed in [`S7-barbell-model-recommendation.md`](S7-barbell-model-recommendation.md). That
+proposed in [`S5-barbell-model-recommendation.md`](S5-barbell-model-recommendation.md). That
 document remains the decision record for *why* the bar is detected rather than the athlete, and
 why subject identity is never learned; its choice of **the plate face** as the detection target,
 and of **SAM 2 propagation** as the labelling route, were both replaced for reasons recorded in §6.

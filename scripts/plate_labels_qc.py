@@ -14,7 +14,7 @@ handful of frames instead of all of them.
 mask, `edge_on` from the axis ratio. `stack_index` is the one a human must supply -- the loading
 does not change mid-lift, so it is one decision per capture, not per frame.
 
-See docs/specs/preprocessing/S7-barbell-annotation-guide.md §3 (Pass B) and §5.
+See docs/specs/preprocessing/S5-barbell-annotation-guide.md §3 (Pass B) and §5.
 """
 
 from __future__ import annotations
@@ -305,7 +305,7 @@ def main() -> int:
         },
         "stack_index_supplied": bool(stack_index),
         "written_at": datetime.now(UTC).isoformat(),
-        "guide": "docs/specs/preprocessing/S7-barbell-annotation-guide.md",
+        "guide": "docs/specs/preprocessing/S5-barbell-annotation-guide.md",
         "annotations": records,
     }
     replacing = plates_path.exists()

@@ -271,3 +271,14 @@ Pure geometry is kept separate from I/O and built test-first:
 - **50kg3:** 412 of 433 frames have a height. Rest is at 225 mm by construction (192 mm by the floor
   plane). Peak is 1908 mm at 5.885 s.
 - **Not yet done:** a draft 6 restating the spec as A-only.
+
+---
+
+## Renumbering note (2026-10-20)
+
+Stages were renumbered so the barbell detector runs before pose: **S7 Barbell → S5**, **S5 Pose →
+S6**, **S6 Lift → S7**. This draft is frozen, so its text still uses the old numbers. Read every
+"S7" above as S5, "S5" as S6, and "S6" as S7.
+
+Its files were renamed `S7-*.md` → `S5-*.md`, and `S5-*.md` → `S6-*.md` for the pose specs. Links
+above that use the old names point to the files of the same name with the new prefix.

@@ -121,7 +121,7 @@ def test_preprocess_command_accepts_pose_root_and_builds_a_detector(
             "--output",
             str(tmp_path / "s2"),
             "--pose",
-            str(tmp_path / "s5"),
+            str(tmp_path / "s6"),
         ],
     )
 
@@ -145,7 +145,7 @@ def _preprocess_args(tmp_path: Path, *extra: str) -> list[str]:
         "--output",
         str(tmp_path / "s2"),
         "--pose",
-        str(tmp_path / "s5"),
+        str(tmp_path / "s6"),
         *extra,
     ]
 
@@ -182,30 +182,30 @@ def test_pose_without_lift_runs_detection_only(
     assert config.lift_root is None
 
 
-def test_lift_flag_enables_s6(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_lift_flag_enables_s7(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _capture_flow_call(monkeypatch)
     (tmp_path / "raw").mkdir()
 
-    result = runner.invoke(app, _preprocess_args(tmp_path, "--lift", str(tmp_path / "s6")))
+    result = runner.invoke(app, _preprocess_args(tmp_path, "--lift", str(tmp_path / "s7")))
 
     assert result.exit_code == 0, result.output
     config, detector = calls[0]
-    assert config.lift_root == tmp_path / "s6"
-    assert isinstance(detector, _StubDetector)  # S5 still runs: --skip-detect was not given
+    assert config.lift_root == tmp_path / "s7"
+    assert isinstance(detector, _StubDetector)  # S6 still runs: --skip-detect was not given
 
 
-def test_skip_detect_builds_no_detector_so_s6_can_reuse_an_earlier_run(
+def test_skip_detect_builds_no_detector_so_s7_can_reuse_an_earlier_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls = _capture_flow_call(monkeypatch)
     (tmp_path / "raw").mkdir()
 
     result = runner.invoke(
-        app, _preprocess_args(tmp_path, "--lift", str(tmp_path / "s6"), "--skip-detect")
+        app, _preprocess_args(tmp_path, "--lift", str(tmp_path / "s7"), "--skip-detect")
     )
 
     assert result.exit_code == 0, result.output
     config, detector = calls[0]
     assert detector is None  # no checkpoint is loaded at all
-    assert config.pose_root == tmp_path / "s5"  # still names the tree S6 reads
-    assert config.lift_root == tmp_path / "s6"
+    assert config.pose_root == tmp_path / "s6"  # still names the tree S7 reads
+    assert config.lift_root == tmp_path / "s7"

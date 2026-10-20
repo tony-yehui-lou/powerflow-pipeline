@@ -203,7 +203,7 @@ HUMAN_SKELETON = Skeleton(
 # Normative source: "Human Body Model Data Storage v1" (docs/spec, GitHub issue #117).
 SKELETON_ID: Final = "human-v2"  # versioned: stored pose is only readable against its topology
 SKELETON_SCHEMA_VERSION: Final = "1.0.0"
-# 2.1.0 made JointSeries.position nullable as a whole, for documents S5 produced with its
+# 2.1.0 made JointSeries.position nullable as a whole, for documents S6 produced with its
 # metric lift switched off (PoseOutput.PIXELS_2D). A 2.0.0 reader must not be handed one.
 POSE_SCHEMA_VERSION: Final = "2.1.0"
 
@@ -249,7 +249,7 @@ class JointSeries(BaseModel):
     A frame the detector could not place carries `None` for both positions and zero confidence;
     the arrays keep their full length so every index still refers to the same frame.
 
-    `position` is the whole-array `None` when S5 ran its 2D detection step without the metric
+    `position` is the whole-array `None` when S6 ran its 2D detection step without the metric
     lift (`PoseOutput.PIXELS_2D`). That is a different claim from a tuple of `None`s: the tuple
     says every frame dropped out, `None` says positions were never computed for this capture.
     Collapsing the two would let a consumer read "the detector saw nothing" off a document whose
@@ -360,7 +360,7 @@ class PoseDocument(BaseModel):
 
     @property
     def has_positions(self) -> bool:
-        """Whether S5's metric lift ran for this capture, i.e. `position` is populated.
+        """Whether S6's metric lift ran for this capture, i.e. `position` is populated.
 
         `validate_joints` guarantees the joints agree, so any one of them answers for all.
         """

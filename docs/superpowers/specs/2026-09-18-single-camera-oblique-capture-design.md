@@ -25,7 +25,7 @@ Two things are different, and the earlier design doc only addressed the first:
 1. **Shape** — path depth, camera identity, and where `metadata.yaml` lives. Pure plumbing.
 2. **Geometry and scene** — one camera at an oblique azimuth, in a small gym with spectators
    inside the frame and inside the near foreground. This is not plumbing: it changes what the
-   floor annotation has to be, what a rectified frame means downstream, and which of S5's
+   floor annotation has to be, what a rectified frame means downstream, and which of S6's
    assumptions still hold.
 
 Intended outcome: one command over `../data/raw` processes both roots, mixed layouts included,
@@ -152,7 +152,7 @@ video:
 
 Both fields are **optional and non-blocking**: a capture missing them is processed normally,
 with `view: null` recorded. They are carried through `metadata.yaml` into every stage root and
-into `retilt_sidecar.json` as provenance. Nothing in S0–S5 branches on them today. They exist
+into `retilt_sidecar.json` as provenance. Nothing in S0–S6 branches on them today. They exist
 so the training layer can partition by view instead of guessing from a directory name, and so
 the omission is visible rather than silent.
 
@@ -184,7 +184,7 @@ the meaning of every existing July output. Instead:
   I3, and in `PoseDocument`'s docstring alongside the existing "two cameras of one session are
   not in a common frame" note.
 
-Named follow-up, out of scope here: **S6 Yaw alignment** — derive the platform azimuth from
+Named follow-up, out of scope here: **S7 Yaw alignment** — derive the platform azimuth from
 the operator-annotated platform rectangle (the taped square is a known-rectangular ground
 feature, visible in every August frame, and its two vanishing directions in the rectified
 floor plane give the azimuth without depending on the athlete at all).
@@ -358,9 +358,9 @@ Adopted from `2026-08-29-dual-capture-layout-design.md` §5, with two correction
 
 ---
 
-## 6. S5 Pose under a single oblique camera
+## 6. S6 Pose under a single oblique camera
 
-S5 is the only stage with a **hard type-level blocker**, and one substantive accuracy risk.
+S6 is the only stage with a **hard type-level blocker**, and one substantive accuracy risk.
 
 ### 6.1 Required: `CameraName` cannot name an August capture
 
@@ -394,11 +394,11 @@ height 0.15. So this is a **pre-existing defect that August amplifies**, not an 
 5 candidates instead of 2 means five times the chances to latch onto the wrong one, with no
 signal in the output when it does.
 
-**Decision: out of scope for this spec, tracked as a named follow-up** — "S5 subject
+**Decision: out of scope for this spec, tracked as a named follow-up** — "S6 subject
 selection": detect with `num_poses > 1`, then select per capture with an explicit,
 recorded rule (temporal continuity plus proximity to the operator-annotated platform region),
 and write the number of candidates and the selected index into the pose output. It is a change
-to S5's contract that affects July equally, and folding it into a layout-and-annotation spec
+to S6's contract that affects July equally, and folding it into a layout-and-annotation spec
 would couple two unrelated risks.
 
 **What this spec does require:** August pose output is **not accepted on gate-passing alone**.
@@ -439,7 +439,7 @@ No existing default changes. In particular `retilt_max_plane_rms_m` stays at 0.0
 - `2-cut.md` §§1–3 — the interval owner is chosen by role, not by the literal name `Side`.
 - `4-retilt.md` §1 — the `single` role's unprefixed keys, the `view` fields, and §4.5's
   day-level consistency check in §7's validation list.
-- `S5-pose-model-recommendation.md` — the `role`/`capture_id` document change (§6.1) and the
+- `S6-pose-model-recommendation.md` — the `role`/`capture_id` document change (§6.1) and the
   subject-selection follow-up (§6.2).
 - `README.md` — both layouts, both output shapes, run commands, and `--only`.
 
@@ -531,7 +531,7 @@ Anything outside that is a rectangle that caught something other than floor — 
 rather than accept the run. A value inside the gates but outside this envelope is exactly the
 §4.5 case; the manifest warning should already be pointing at it.
 
-Then, per §6.2, render the S5 skeleton over at least three August captures and confirm the
+Then, per §6.2, render the S6 skeleton over at least three August captures and confirm the
 tracked person is the lifter.
 
 Finally, re-run the July root and diff a `retilt_sidecar.json` against the values recorded
@@ -543,9 +543,9 @@ touched by accident.
 
 ## 11. Out of scope
 
-- **S6 Yaw alignment** (§3.3) — rotating the floor-anchored frame into the athlete's sagittal
+- **S7 Yaw alignment** (§3.3) — rotating the floor-anchored frame into the athlete's sagittal
   plane. Needs a measured azimuth; changes the meaning of existing outputs.
-- **S5 subject selection** (§6.2) — a pre-existing defect that August amplifies; affects July
+- **S6 subject selection** (§6.2) — a pre-existing defect that August amplifies; affects July
   equally and belongs in its own spec.
 - **Cross-clip frame dimensions** (§4.2) — August's S4 output is a different size from July's,
   widening an I5 gap `6-cropping.md` already lists as open.

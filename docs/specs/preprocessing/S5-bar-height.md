@@ -171,3 +171,14 @@ Pure geometry is kept separate from I/O, per the pipeline conventions, and built
   - Bar tilt (one end higher) cannot be recovered from one cap and one collar. Adding collar depth
     as a fifth observation produced 2–4° of tilt and a 100 mm height shift at rest, where the truth
     is 0°, so depth is too noisy to supply it.
+
+---
+
+## Renumbering note (2026-10-20)
+
+Stages were renumbered so the barbell detector runs before pose: **S7 Barbell → S5**, **S5 Pose →
+S6**, **S6 Lift → S7**. This draft is frozen, so its text still uses the old numbers. Read every
+"S7" above as S5, "S5" as S6, and "S6" as S7.
+
+Its files were renamed `S7-*.md` → `S5-*.md`, and `S5-*.md` → `S6-*.md` for the pose specs. Links
+above that use the old names point to the files of the same name with the new prefix.
