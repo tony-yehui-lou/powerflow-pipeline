@@ -5,7 +5,7 @@ Pinned to `mediapipe==0.10.35` in `pyproject.toml`: newer 1.x releases hard-cras
 compiled graph -- an uncatchable native `abort()`, not a Python exception, reproduced while
 building this module and tracked upstream at
 https://github.com/google-ai-edge/mediapipe/issues/6356. See
-docs/specs/preprocessing/S5-pose-model-recommendation.md for the full model-choice writeup.
+docs/specs/preprocessing/S6-pose-model-recommendation.md for the full model-choice writeup.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ class MediaPipePoseDetector:
 
     Runs each frame independently in `IMAGE` mode -- simpler than `VIDEO` mode's monotonic-
     timestamp bookkeeping, at the cost of no temporal smoothing between frames. Good enough
-    for a first S5 implementation; a future pass can move to `VIDEO` mode without changing
+    for a first S6 implementation; a future pass can move to `VIDEO` mode without changing
     this class's `Detector2D` contract.
     """
 

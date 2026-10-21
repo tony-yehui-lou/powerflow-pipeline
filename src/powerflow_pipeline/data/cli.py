@@ -70,7 +70,7 @@ def preprocess(
         typer.Option(
             "--pose",
             help=(
-                "Where S5 publishes detected 2D poses. Omit to skip S5; give it without "
+                "Where S6 publishes detected 2D poses. Omit to skip S6; give it without "
                 "--lift to detect joints without back-projecting them."
             ),
         ),
@@ -80,9 +80,31 @@ def preprocess(
         typer.Option(
             "--lift",
             help=(
-                "Where S6 publishes poses lifted to floor-frame metres using LiDAR depth. "
-                "Omit to skip S6. Reads S5's published document, so it can lift an earlier "
+                "Where S7 publishes poses lifted to floor-frame metres using LiDAR depth. "
+                "Omit to skip S7. Reads S6's published document, so it can lift an earlier "
                 "run's detections without re-running the detector."
+            ),
+        ),
+    ] = None,
+    kinematics_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--kinematics",
+            help=(
+                "Where S8 publishes joint_hva.json: every joint's 3D position and height, solved "
+                "from S6's 2D pose, the lifter's body measurements (metadata.yaml athlete:), the "
+                "bar (--barbell) and the floor. Needs --pose. Reads no depth."
+            ),
+        ),
+    ] = None,
+    barbell_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--barbell",
+            help=(
+                "S5's barbell detections (a root mirroring the raw layout, holding "
+                "predictions.json per capture). With --pose, S6 corrects both wrists against "
+                "the bar the hands hold; without it, wrists are left exactly as detected."
             ),
         ),
     ] = None,
@@ -91,14 +113,14 @@ def preprocess(
         typer.Option(
             "--skip-detect",
             help=(
-                "Don't run S5; reuse the poses already published under --pose. Use with "
+                "Don't run S6; reuse the poses already published under --pose. Use with "
                 "--lift to redo the depth back-projection without re-running the detector."
             ),
         ),
     ] = False,
     pose_detector: Annotated[
         PoseDetector,
-        typer.Option("--pose-detector", help="Which 2D keypoint model S5 runs."),
+        typer.Option("--pose-detector", help="Which 2D keypoint model S6 runs."),
     ] = PoseDetector.MEDIAPIPE,
     rtmpose_variant: Annotated[
         RTMPoseVariant,
@@ -116,8 +138,8 @@ def preprocess(
         typer.Option(
             "--rtmpose-subject-depth/--no-rtmpose-subject-depth",
             help=(
-                "Let S5 read depth to pick which person is the athlete (never to place a "
-                "joint). --no-rtmpose-subject-depth makes S5 read no depth at all."
+                "Let S6 read depth to pick which person is the athlete (never to place a "
+                "joint). --no-rtmpose-subject-depth makes S6 read no depth at all."
             ),
         ),
     ] = True,
@@ -145,7 +167,8 @@ def preprocess(
 ) -> None:
     """Ingest a raw capture (S0), cut it to the lift window (S1), rotate it (S2),
     retilt it level with the floor (S3), crop it to a stable common region (S4), and,
-    when `--pose` is given, detect joints (S5).
+    when `--pose` is given, detect joints (S6); `--lift` lifts them with LiDAR depth (S7), and
+    `--kinematics` solves them in 3D from the lifter's body measurements instead (S8).
 
     Both raw layouts are handled by one invocation: the directory shape is detected per
     capture from where its operator `metadata.yaml` sits, so there is no layout flag to
@@ -164,6 +187,8 @@ def preprocess(
         output_root=output_root,
         pose_root=pose_root,
         lift_root=lift_root,
+        kinematics_root=kinematics_root,
+        barbell_root=barbell_root,
         skip_detect=skip_detect,
         pose_detector=pose_detector,
         rtmpose_variant=rtmpose_variant,
@@ -175,7 +200,7 @@ def preprocess(
         overwrite=overwrite,
     )
     # A detector loads (downloading on first use) its pretrained checkpoints, so one is only
-    # constructed when S5 is actually requested. S6 needs none: it reads S5's published
+    # constructed when S6 is actually requested. S7 needs none: it reads S6's published
     # document, which is what makes `--lift` alone a valid way to re-run just the depth half.
     detector: Detector2D | None = None
     if pose_root is not None and not skip_detect:

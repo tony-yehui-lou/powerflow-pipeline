@@ -1,6 +1,6 @@
 """Subject selection, candidate depth, and frame assembly for the RTMPose detector.
 
-Subject selection (S5-rtmpose-migration.md §4) is this class's own responsibility rather than
+Subject selection (S6-rtmpose-migration.md §4) is this class's own responsibility rather than
 something the model hides, so it is tested directly on synthetic arrays. `detect` is exercised
 with `rtmlib`'s tracker stubbed out: the decode/select/map/provenance wiring is ours and worth
 testing, while the inference behind it is not, and needs a real checkpoint download to run.
@@ -257,10 +257,10 @@ def test_detect_records_provenance(tmp_path: Path) -> None:
 
 
 def test_detect_reads_no_depth_when_subject_depth_is_disabled(tmp_path: Path) -> None:
-    """S5's one remaining depth read is subject selection; this turns it off completely.
+    """S6's one remaining depth read is subject selection; this turns it off completely.
 
     The depth directory here is unreadable garbage -- if the detector opened it, it would
-    raise. With the switch off it must not look, leaving S5 a pure pixel-space stage.
+    raise. With the switch off it must not look, leaving S6 a pure pixel-space stage.
     """
 
     rgb = tmp_path / "rgb.mp4"

@@ -5,7 +5,7 @@ is unit-testable without running inference (CLAUDE.md: TDD, synthetic fixtures).
 `pose_landmark_mapping.py`, which does the same job for MediaPipe's 33 BlazePose landmarks.
 
 Halpe-26 is chosen over COCO-17 because it carries an explicit `head` and `neck`
-(docs/specs/preprocessing/S5-rtmpose-migration.md §2), and both matter here:
+(docs/specs/preprocessing/S6-rtmpose-migration.md §2), and both matter here:
 
 - `head` is a real head point rather than the nose, which is what makes BlazePose's head height
   read oddly whenever the athlete is looking down -- most of a lift.

@@ -1,6 +1,6 @@
-# S5 Pose — bone-length-constrained joint reconstruction
+# S6 Pose — bone-length-constrained joint reconstruction
 
-Status: **draft** | Relates to: `S5-rtmpose-migration.md`, `S5-pose-model-recommendation.md` (issue [#118](https://github.com/tony-yehui-lou/PowerFlow/issues/118)) | Updated: 2026-09-20
+Status: **draft** | Relates to: `S6-rtmpose-migration.md`, `S6-pose-model-recommendation.md` (issue [#118](https://github.com/tony-yehui-lou/PowerFlow/issues/118)) | Updated: 2026-09-20
 
 ## Purpose
 
@@ -15,7 +15,7 @@ targets exactly the loss it left alone:
 ```text
 S4 Crop -> 2D detector -> depth back-projection -> [ bone-constrained fill ] -> floor frame -> PoseDocument
                 ^^^^^^^^                            ^^^^^^^^^^^^^^^^^^^^^^^
-            S5-rtmpose-migration.md                  this, and only this
+            S6-rtmpose-migration.md                  this, and only this
 ```
 
 The loss is measured. On `22 August/CnJ/75kgCnJ1` and `22 August/Snch/38kgSnch1`, **42% of
@@ -33,7 +33,7 @@ bone-length medians — femur 0.35 m and tibia 0.36 m are near-plausible while u
 
 **In:** unchanged — `DepthBackedPoseModel.predict`'s existing arguments.
 **Out:** `dict[JointId, JointSeries]` as today, plus per-joint-per-frame provenance (§5) — which
-requires a schema decision, and is the one part of this spec that reaches outside S5.
+requires a schema decision, and is the one part of this spec that reaches outside S6.
 
 ## Scope
 
@@ -45,7 +45,7 @@ new reconstruction module, and the `AthleteMeta` plumbing in §1.
 - **Any change to the 2D detector.** This must work identically behind MediaPipe and RTMPose.
 - **Temporal smoothing of output positions.** Reconstruction fills gaps from geometry that holds
   in a single frame; smoothing changes values that *were* observed. Same reasoning as
-  `S5-rtmpose-migration.md` §3.
+  `S6-rtmpose-migration.md` §3.
 - **Two-camera fusion.** See §9 — it is the better fix and this spec is not it.
 - **Improving the depth sampler itself** (segmentation gating, nearest-surface instead of median,
   per-frame torso-depth gates). Those reduce the number of joints needing reconstruction and are
@@ -102,7 +102,7 @@ Even as a prior, the metadata must actually arrive:
   filled raw file. **Investigate before building on it** — either the template path resolution is
   wrong or the date-level/per-capture distinction is being conflated. This spec assumes the
   measurements can be made to arrive; it does not assume they already do.
-- S5 reads the athlete block from its own stage-input `metadata.yaml`, reached via
+- S6 reads the athlete block from its own stage-input `metadata.yaml`, reached via
   `CameraRecord.metadata_relative`, the same way `_floor_offset_m` reaches S3's sidecar.
 
 ## 2. Estimating per-capture bone lengths
@@ -120,7 +120,7 @@ For each bone in `HUMAN_SKELETON.bones`, over all frames of one capture:
    present; then a height-scaled population ratio if `height_in_cm` is present; then no constraint
    at all, leaving that bone's joints unreconstructed.
 
-Plausible adult ranges, as in `S5-rtmpose-migration.md` §6.2 — femur 0.38–0.50 m, tibia
+Plausible adult ranges, as in `S6-rtmpose-migration.md` §6.2 — femur 0.38–0.50 m, tibia
 0.36–0.45, torso 0.45–0.60, upper arm 0.26–0.36. Add: forearm 0.22–0.29, hip width 0.15–0.25.
 
 ### 2.1 The circularity, stated plainly

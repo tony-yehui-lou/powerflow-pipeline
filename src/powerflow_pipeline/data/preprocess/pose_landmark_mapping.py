@@ -43,7 +43,7 @@ _DIRECT_MAP: dict[JointId, int] = {
 
 # BlazePose has no clavicle landmark. Approximated as a point mostly at the shoulder, pulled
 # slightly toward the nose -- the collarbone's anatomical position, between the shoulder joint
-# and the base of the neck (docs/specs/preprocessing/S5-pose-model-recommendation.md, Gaps:
+# and the base of the neck (docs/specs/preprocessing/S6-pose-model-recommendation.md, Gaps:
 # "Joint-to-landmark mapping"). Weighted toward the shoulder so a bad interpolation doesn't
 # collapse two visually distinct skeleton joints onto the same point.
 _CLAVICLE_SHOULDER_WEIGHT = 0.7

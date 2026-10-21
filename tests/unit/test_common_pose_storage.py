@@ -59,7 +59,7 @@ def test_pose_path_follows_the_stage_output_layout(tmp_path: Path) -> None:
 
 
 def test_pose_output_dir_names_the_new_stage() -> None:
-    assert POSE_OUTPUT_DIR == "s5_pose_output"
+    assert POSE_OUTPUT_DIR == "s6_pose_output"
 
 
 def test_pose_path_accepts_a_session_path_of_any_depth(tmp_path: Path) -> None:

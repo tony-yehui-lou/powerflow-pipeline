@@ -1,6 +1,6 @@
 """`to_pixel_only_series`: where a detector's 2D output becomes the pipeline's own type.
 
-S5 publishes pixels and nothing else, so the interesting assertions are about what is *absent*
+S6 publishes pixels and nothing else, so the interesting assertions are about what is *absent*
 (no positions) and about the `Detector2D` contract being enforced at this boundary rather than
 surfacing later as a `PoseDocument` frame-count error.
 """

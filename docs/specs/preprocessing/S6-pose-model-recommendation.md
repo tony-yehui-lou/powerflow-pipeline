@@ -1,10 +1,10 @@
-# S5 Pose — Joint Detection Model Recommendation
+# S6 Pose — Joint Detection Model Recommendation
 
 Status: **draft** | Scope: GitHub issue [#118](https://github.com/tony-yehui-lou/PowerFlow/issues/118) "Find a Suitable Model", under epic [#61](https://github.com/tony-yehui-lou/PowerFlow/issues/61) "Joint Detection" | Updated: 2026-09-17
 
 ## Executive Summary
 
-S5 Pose needs to turn one camera's cropped RGB video into per-joint pixel coordinates, per-joint
+S6 Pose needs to turn one camera's cropped RGB video into per-joint pixel coordinates, per-joint
 confidence, and per-joint **metric 3D position in a floor-anchored frame** (`PoseDocument`,
 `common/models.py`). The recommended architecture splits this into two independently-chosen
 pieces: **any permissively-licensed 2D keypoint detector on RGB** (MediaPipe Pose or RTMPose),
@@ -52,7 +52,7 @@ flowchart TD
         RetiltSidecar[retilt_sidecar.json: floor height]
     end
 
-    subgraph S5["S5 Pose (new)"]
+    subgraph S6["S6 Pose (new)"]
         Detector["2D keypoint detector<br/>RTMPose or MediaPipe Pose"]
         BackProject["Depth back-projection<br/>(reuses Retilt's geometry)"]
         FloorTransform["Floor-frame transform"]
@@ -124,7 +124,7 @@ displacement is wrong by an unrecorded factor.
 - **New dependency approval** — per `powerflow-pipeline/CLAUDE.md`, adding `mmpose`/`mmcv` (for RTMPose) or `mediapipe` is a new dependency and should be explicitly approved before landing, not silently added.
 - **Floor-height provenance** — this doc assumes the per-camera floor height above the optical centre (needed to convert back-projected camera-frame Y into floor-frame Y) is either already in `retilt_sidecar.json` or trivially derivable from the fitted plane's constant term; this should be confirmed against the actual sidecar schema before implementation (`4-retilt.md` §6 lists sidecar fields but doesn't explicitly name a "camera height" field — it may need to be added or recomputed from `floor_normal_cam`/plane fit at Retilt time).
 - **Accuracy validation** — no numeric validation yet exists for either candidate 2D detector against real PowerFlow lift footage (barbell occlusion, fast bar-path frames, non-frontal limb angles at lockout). A short calibration spike against a handful of real sessions, comparing RTMPose and MediaPipe Pose output against manually-annotated frames, is recommended before committing to one over the other for production.
-- **Front/Side fusion is out of scope here** — `PoseDocument`'s own docstring already notes two cameras of one session aren't in a common frame until a fusion step exists; this recommendation only concerns single-camera monocular-plus-depth pose per S5's current contract.
+- **Front/Side fusion is out of scope here** — `PoseDocument`'s own docstring already notes two cameras of one session aren't in a common frame until a fusion step exists; this recommendation only concerns single-camera monocular-plus-depth pose per S6's current contract.
 
 ## Sources
 
@@ -132,5 +132,5 @@ displacement is wrong by an unrecorded factor.
 - [MediaPipe Pose Landmarker](https://developers.google.com/edge/mediapipe/solutions/vision/pose_landmarker) — Apache-2.0 licensed, Google-maintained, 33-landmark BlazePose model, real-time on-device.
 - [Ultralytics license page](https://www.ultralytics.com/license) and [Ultralytics/ultralytics GitHub discussion #3974](https://github.com/orgs/ultralytics/discussions/3974) — YOLO-pose models are AGPL-3.0 by default; commercial closed-source use requires an Enterprise License.
 - [isarandi/metrabs](https://github.com/isarandi/metrabs) — code is MIT-licensed, but pretrained model weights are explicitly restricted to non-commercial use due to training-dataset licensing (stated directly in the repo's README).
-- `powerflow-pipeline/docs/specs/preprocessing/4-retilt.md` §2, §6 — this repository's own existing depth back-projection math and sidecar contract, reused rather than reimplemented for S5.
+- `powerflow-pipeline/docs/specs/preprocessing/4-retilt.md` §2, §6 — this repository's own existing depth back-projection math and sidecar contract, reused rather than reimplemented for S6.
 - OpenPose (CMU) — long-standing academic/non-commercial license via CMU's technology-transfer office; well-established, not re-verified live in this pass.

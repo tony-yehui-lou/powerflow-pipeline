@@ -1,12 +1,12 @@
-"""S6 · Metric lift -> gives S5's pixel-space joints floor-frame positions from LiDAR depth.
+"""S7 · Metric lift -> gives S6's pixel-space joints floor-frame positions from LiDAR depth.
 
-S5 Pose publishes a `PoseDocument` with `position: null`; this stage reads it, back-projects
+S6 Pose publishes a `PoseDocument` with `position: null`; this stage reads it, back-projects
 every detected pixel through S4's depth stream, and publishes the same document with positions
 filled in. The split is what lets the two be re-run independently: detection is the expensive
 half (RTMPose on CPU), and the depth sampler is the half still being revised -- see
-docs/specs/preprocessing/S5-bone-constrained-reconstruction.md.
+docs/specs/preprocessing/S6-bone-constrained-reconstruction.md.
 
-Everything this stage reads is another stage's published output: S5's pose document, S4's
+Everything this stage reads is another stage's published output: S6's pose document, S4's
 `depth/` and `confidence/` frames, S3's floor offset, and S0's intrinsics off the crop record.
 Nothing is recomputed.
 """
@@ -30,7 +30,7 @@ def _floor_offset_m(config: PreprocessConfig, record: CameraRecord) -> float:
 
     `PlaneFit.floor_offset_m` is invariant under S3's rectifying rotation (a distance from the
     origin doesn't change when the axes about that origin are rotated), so it's read straight
-    off S3's pre-rectification fit rather than recomputed here -- S6 has no floor region or
+    off S3's pre-rectification fit rather than recomputed here -- S7 has no floor region or
     depth-selection logic of its own, only 4-retilt.md's.
     """
 
@@ -44,9 +44,9 @@ def _floor_offset_m(config: PreprocessConfig, record: CameraRecord) -> float:
 def lift_pose_camera(
     record: CameraRecord, config: PreprocessConfig
 ) -> tuple[CameraRecord, StepResult]:
-    """Lift one camera's S5 pose document into metres and publish it to `config.lift_root`.
+    """Lift one camera's S6 pose document into metres and publish it to `config.lift_root`.
 
-    `record` is S4's output record, the same one S5 was given: it carries the intrinsics and
+    `record` is S4's output record, the same one S6 was given: it carries the intrinsics and
     the RGB/depth dimensions the back-projection needs, and `record.source` is where S4's
     `depth/` and `confidence/` frames live.
     """
@@ -78,7 +78,7 @@ def lift_pose_camera(
         patch_radius=config.lift_patch_radius,
     )
 
-    # S5's frame axis passes through untouched: it was derived from `rgb.mp4`'s own PTS and
+    # S6's frame axis passes through untouched: it was derived from `rgb.mp4`'s own PTS and
     # this stage adds no frames, drops none, and re-times nothing.
     document = PoseDocument(
         capture_id=detected.capture_id,

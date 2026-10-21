@@ -1,4 +1,4 @@
-"""Pure maths for S5 Pose's depth-based metric lift.
+"""Pure maths for S6 Pose's depth-based metric lift.
 
 No I/O, no fixtures beyond synthetic numpy arrays -- checked numerically against known-good
 geometry, never merely "it ran" (CLAUDE.md), same discipline as `test_preprocess_retilt_math.py`.

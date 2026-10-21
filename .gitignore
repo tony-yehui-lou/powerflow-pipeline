@@ -18,3 +18,6 @@ htmlcov/
 
 *.lock
 
+
+# Local Claude Code state: settings and git worktrees, not project content.
+.claude/

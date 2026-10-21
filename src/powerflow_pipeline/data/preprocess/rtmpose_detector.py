@@ -1,6 +1,6 @@
 """Concrete `Detector2D` backed by RTMPose (Halpe-26) through `rtmlib`.
 
-Implements docs/specs/preprocessing/S5-rtmpose-migration.md. Unlike MediaPipe/BlazePose, this
+Implements docs/specs/preprocessing/S6-rtmpose-migration.md. Unlike MediaPipe/BlazePose, this
 is **top-down**: a YOLOX person detector proposes boxes for every person in frame, then pose is
 estimated per box. That inverts the three BlazePose properties the spec blames for the measured
 per-capture detection rates (99%, 98%, 42%, 12%) -- it is multi-person, its detector is not
@@ -165,12 +165,12 @@ class RTMPoseDetector:
     def detect(self, rgb_path: Path, n_frames: int) -> dict[JointId, JointPixelSeries]:
         """Run RTMPose over one capture's frames, tracking a single chosen subject.
 
-        This is the **only** place S5 touches depth, and it never produces a coordinate from
+        This is the **only** place S6 touches depth, and it never produces a coordinate from
         it: depth is read solely to decide *which person in frame is the athlete* (§4's rule 1,
         nearest by depth), and the answer is an index into the detected people. Every keypoint
-        this method returns comes from RGB alone. The metric lift is S6 (`pose_lift.py`).
+        this method returns comes from RGB alone. The metric lift is S7 (`pose_lift.py`).
 
-        `use_depth_for_subject=False` removes even that read, leaving S5 a pure pixel-space
+        `use_depth_for_subject=False` removes even that read, leaving S6 a pure pixel-space
         stage, at the cost of falling back to §4's rule 2 (largest bounding box) when a capture
         holds bystanders. Depth is read from `rgb_path`'s own directory, since S4 Crop
         publishes `depth/` and `confidence/` beside `rgb.mp4`; their absence degrades selection

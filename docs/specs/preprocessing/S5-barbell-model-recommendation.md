@@ -1,10 +1,18 @@
-# S7 Barbell — Detection Model Recommendation
+# S5 Barbell — Detection Model Recommendation
 
 Status: **draft** | Scope: GitHub issue [#121](https://github.com/tony-yehui-lou/PowerFlow/issues/121) "Find a suitable model", under epic [#59](https://github.com/tony-yehui-lou/PowerFlow/issues/59) "Barbell Detection" | Updated: 2026-10-16
 
+> **Superseded in part, 2026-10-19.** The detection target is no longer the plate face: it is the
+> bar's own **cap** and **collar**, hand-labelled as boxes on sampled frames rather than tracked
+> with SAM 2. What was built, what it measured, and why both changed is in
+> [`S5-barbell-landmark-detection.md`](S5-barbell-landmark-detection.md). This document stands as
+> the decision record for what did not change — detecting the bar rather than the athlete, refusing
+> to learn subject identity, taking metric scale from a known bar dimension rather than LiDAR — and
+> for the licensing and alternatives analysis behind the model choice.
+
 ## Executive Summary
 
-S7 Barbell needs to turn one camera's S4-cropped RGB video into the `bar` block the UI contract
+S5 Barbell needs to turn one camera's S4-cropped RGB video into the `bar` block the UI contract
 already fixes — `leftEnd[]`, `rightEnd[]` and `com` per frame (`powerflow-ui/docs/schema-normalized/lift.schema.json`).
 The recommendation is to detect **the plate face, not the barbell**: a single-class detector
 (**fine-tuned RTMDet, Apache-2.0, served as ONNX through the `rtmlib`/`onnxruntime` path the
@@ -77,11 +85,11 @@ it is load-bearing.
 
 ### C1 · Plate instance detection
 
-- **Choice:** **Adapt** — fine-tune **[RTMDet](https://github.com/open-mmlab/mmdetection)-tiny/s** (MMDetection, Apache-2.0) as a **single-class `plate` detector** on PowerFlow's own frames; export to ONNX and serve it through `onnxruntime`, which `rtmlib` already pulls in for S5.
-- **Why:** the deciding criterion is **license plus zero new runtime dependency**. RTMDet is Apache-2.0 end to end, and `rtmlib` — already a dependency, also Apache-2.0 — runs RTMDet-family ONNX models without `mmcv`/`mmdet` installed. So training-time `mmdet` stays an offline, dev-only concern while the pipeline gains no new runtime package. Detecting one rigid, high-contrast class from a fixed rig is an easy detection problem; architecture choice is genuinely low-stakes here, and reusing the S5 serving path is worth more than a point of COCO AP.
+- **Choice:** **Adapt** — fine-tune **[RTMDet](https://github.com/open-mmlab/mmdetection)-tiny/s** (MMDetection, Apache-2.0) as a **single-class `plate` detector** on PowerFlow's own frames; export to ONNX and serve it through `onnxruntime`, which `rtmlib` already pulls in for S6.
+- **Why:** the deciding criterion is **license plus zero new runtime dependency**. RTMDet is Apache-2.0 end to end, and `rtmlib` — already a dependency, also Apache-2.0 — runs RTMDet-family ONNX models without `mmcv`/`mmdet` installed. So training-time `mmdet` stays an offline, dev-only concern while the pipeline gains no new runtime package. Detecting one rigid, high-contrast class from a fixed rig is an easy detection problem; architecture choice is genuinely low-stakes here, and reusing the S6 serving path is worth more than a point of COCO AP.
 - **Alternatives considered:**
   - **[D-FINE](https://github.com/Peterande/D-FINE)-S / RT-DETRv2** (Apache-2.0) — modern DETR-family detectors with better COCO AP (D-FINE-S 48.5%) and a much easier install than `mmcv`. A fair substitute if `mmcv` build pain bites. **Caveat that matters:** D-FINE's `*_obj365` and `*_obj2coco` checkpoints are explicitly *not* commercially cleared by their own repo, because Objects365 is academic-only. Only the COCO-trained weights are usable here.
-  - **Ultralytics YOLOv8/YOLO11** — rejected on licensing, on the same grounds [`S5-pose-model-recommendation.md`](S5-pose-model-recommendation.md) rejected YOLO-pose: AGPL-3.0 by default, commercial closed-source use requires an Enterprise License.
+  - **Ultralytics YOLOv8/YOLO11** — rejected on licensing, on the same grounds [`S6-pose-model-recommendation.md`](S6-pose-model-recommendation.md) rejected YOLO-pose: AGPL-3.0 by default, commercial closed-source use requires an Enterprise License.
   - **[YOLO-World](https://github.com/AILab-CVC/YOLO-World)** (open-vocabulary) — GPL-3.0. The repo says commercial usage is "supported", but GPL-3.0 is still copyleft; shipping it inside a closed iPhone app is exactly the case that triggers it. Rejected.
   - **Zero-shot open-vocabulary detection as the production detector** — [GroundingDINO](https://github.com/IDEA-Research/GroundingDINO) (Apache-2.0) or [OWLv2](https://huggingface.co/google/owlv2-base-patch16-ensemble) (Apache-2.0) prompted with "barbell" / "weight plate". Attractive because it needs no labels, but rejected for production on three counts: boxes are loose where we need a sub-pixel centre, both are far heavier per frame than a tiny single-class CNN, and GroundingDINO's released weights list Objects365 in their training mix, which reopens the provenance question its Apache-2.0 header appears to close. Useful for a first look; not the thing to build on.
   - **Classical CV alone** (colour threshold + `HoughCircles` / contour + `fitEllipse`) — zero new dependencies, fully inspectable, and genuinely good *inside a known ROI*. Rejected as the primary detector because the frame contains other plates of the same colours, the plate is an ellipse of varying eccentricity rather than a circle, and the lifter's body cuts the contour. It is kept, deliberately, as the refinement step in C2.
@@ -92,7 +100,7 @@ it is load-bearing.
 - **Why:** the ellipse fit uses the whole plate rim, so it stays centred when the rim is partly clipped or occluded, where a box centre shifts with whatever part of the plate is visible. It also hands C6 the scale ruler for free: under perspective the major axis is (to first order) the unforeshortened 450 mm diameter, while the minor axis encodes the viewing obliquity. No model, no new dependency, and the geometry is verifiable on synthetic fixtures the way `CLAUDE.md` requires.
 - **Alternatives considered:**
   - **RTMDet-Ins / instance segmentation** — a per-plate mask, then fit the ellipse to the mask boundary. Strictly better under heavy occlusion and the right upgrade if the box-plus-fit path proves brittle, at the cost of a heavier export and a mask head to maintain. Recommended as the documented fallback, not the starting point.
-  - **Two-keypoint pose formulation** (train RTMPose to regress "left bar end" / "right bar end" directly) — appealingly direct and would reuse S5's serving code almost verbatim, but it gives a point with no plate diameter, discarding the scale ruler C6 depends on, and single-instance keypoint regression has no natural way to express "there are three other plates in this frame". Rejected.
+  - **Two-keypoint pose formulation** (train RTMPose to regress "left bar end" / "right bar end" directly) — appealingly direct and would reuse S6's serving code almost verbatim, but it gives a point with no plate diameter, discarding the scale ruler C6 depends on, and single-instance keypoint regression has no natural way to express "there are three other plates in this frame". Rejected.
 
 ### C3 · Subject-bar identification
 
@@ -134,10 +142,10 @@ with its limits rather than as a solution:
    holds this discipline elsewhere: *rejected with a reason, never emitted degraded*.
 
 - **Alternatives considered:**
-  - **Cross-check against S5 wrists** (pick the bar whose shaft passes near both detected wrists) —
+  - **Cross-check against S6 wrists** (pick the bar whose shaft passes near both detected wrists) —
     the right structural answer for the no-tap case, since it reduces "which bar" to "which person",
-    a better-posed question. Blocked today: `S5-pose-model-recommendation.md` records the detector
-    running `num_poses=1` and selecting a **bystander** on real frames. Worth revisiting once S5's
+    a better-posed question. Blocked today: `S6-pose-model-recommendation.md` records the detector
+    running `num_poses=1` and selecting a **bystander** on real frames. Worth revisiting once S6's
     subject selection is fixed.
   - **Largest-plate heuristic** — fails on the August foreground stack, which is nearer the camera
     than the athlete and therefore larger on screen.
@@ -167,7 +175,7 @@ with its limits rather than as a solution:
 - **Choice:** **Adapt** — derive millimetres-per-pixel per frame from the fitted ellipse's **major axis against a known plate diameter** (450 mm ± 1 mm for every IWF bumper from 10 kg to 25 kg), with LiDAR depth kept only as an independent cross-check, never as the primary source.
 - **Why:** measured, not assumed — see the table above. At 6.3–6.6 m the subject is beyond the ~5 m rated range of the pre-15-Pro LiDAR (unrecorded which device was used — see Gaps), the bar shaft is roughly one depth pixel wide, and the depth patches at both plate centres in the sampled frame carried no confidence-2 returns. A 450 mm object that is ~107 px across in the same image *is* a ruler, it is in the same pixels the detector already produced, and it rescales itself automatically as the athlete moves toward or away from the camera. This also revives, on a sound footing, the measurement that [`5-scaling.md`](5-scaling.md) retired an entire stage for want of: that document's blocker was that nothing told the pipeline **where** the reference was in the frame or **how big** it was — C1/C2 answer the first, and a recorded plate diameter answers the second.
 - **Alternatives considered:**
-  - **Depth back-projection, reusing S6 Lift** — architecturally the tidiest answer, since S6 already does exactly this for joints, and it would cost almost nothing to implement. Rejected as *primary* on the measurements, not on principle; it remains the right cross-check, and it is the better primary for any future capture shot inside ~4 m.
+  - **Depth back-projection, reusing S7 Lift** — architecturally the tidiest answer, since S7 already does exactly this for joints, and it would cost almost nothing to implement. Rejected as *primary* on the measurements, not on principle; it remains the right cross-check, and it is the better primary for any future capture shot inside ~4 m.
   - **Bar length as the ruler** (2200 mm men's / 2010 mm women's) — a second known dimension, but it is a length *between* the two detections, so it is unavailable whenever one end leaves the frame, and it cannot be measured at all on a single plate. Better used as a consistency check on the plate-derived scale than as the scale itself.
 
 ## Architecture Diagram
@@ -188,7 +196,7 @@ flowchart TD
         ONNX[("plate_detector.onnx")]
     end
 
-    subgraph S7["S7 Barbell (new)"]
+    subgraph S5["S5 Barbell (new)"]
         Detect["Plate detection<br/>RTMDet ONNX via onnxruntime"]
         Fit["Ellipse fit per plate<br/>cv2.fitEllipse"]
         Pick["Subject-bar identification<br/>annotator flag / user tap, not learned"]
@@ -218,7 +226,7 @@ the absence of any candidate to buy (C3, C4).
 
 | Option | Type | Time-to-value | Maintenance burden | Lock-in risk | License / cost | Ops cost | Fit notes |
 |---|---|---|---|---|---|---|---|
-| Fine-tuned RTMDet-tiny (ONNX) | Adapt (OSS) | Medium — needs C5's labels first | Low — one small checkpoint, served by the `onnxruntime` path S5 already uses | Low — ONNX is portable off `mmdet` entirely | Apache-2.0, free | Low — CPU-friendly single-class CNN | Purpose-fit to this rig; the only option that gives tight boxes for the ellipse fit |
+| Fine-tuned RTMDet-tiny (ONNX) | Adapt (OSS) | Medium — needs C5's labels first | Low — one small checkpoint, served by the `onnxruntime` path S6 already uses | Low — ONNX is portable off `mmdet` entirely | Apache-2.0, free | Low — CPU-friendly single-class CNN | Purpose-fit to this rig; the only option that gives tight boxes for the ellipse fit |
 | Zero-shot GroundingDINO / OWLv2 | Adopt (OSS) | **Fast — no labels at all** | Medium — a large VLM-scale model to version and serve | Medium | Apache-2.0 headers, but GroundingDINO's weights list Objects365 (academic-only) in their training mix | High — heaviest per-frame cost of the three | Loose boxes; prompt sensitivity; still needs C2's fit to be usable |
 | Colour + Hough/ellipse, no model | Build (classical) | **Fastest — days, zero labels, zero new deps** | Low, but brittle: every new gym is a new threshold | None | Free | Lowest | Cannot separate the athlete's plates from identically-coloured floor plates; breaks under occlusion |
 
@@ -237,7 +245,7 @@ prompting as a one-afternoon sanity check before investing in labels, not as the
 | Option | Type | Time-to-value | Maintenance burden | Lock-in risk | License / cost | Ops cost | Fit notes |
 |---|---|---|---|---|---|---|---|
 | Plate diameter as ruler (450 mm) | Adapt (custom, reuses C2's fit) | Fast — the ellipse is already fitted | Low — pure geometry, testable on synthetic fixtures | None | Free | None | Self-rescaling as the athlete moves; a fixed constant across the corpus, so nothing to record |
-| LiDAR depth back-projection | Adapt (reuses S6) | Fastest — S6 already implements it | Low — shared with S6 | None | Free | Low | Measured unreliable here: 6.3–6.6 m subject distance, no confidence-2 returns at the sampled plate centres, bar ≈ 1 depth pixel wide |
+| LiDAR depth back-projection | Adapt (reuses S7) | Fastest — S7 already implements it | Low — shared with S7 | None | Free | Low | Measured unreliable here: 6.3–6.6 m subject distance, no confidence-2 returns at the sampled plate centres, bar ≈ 1 depth pixel wide |
 | Bar length as ruler (2200/2010 mm) | Build | Fast | Low | None | Free | None | Unavailable whenever one end leaves frame; men's vs women's bar is separable from the measurement itself (a 9% difference, ~20 px at August scale) |
 
 The criteria that usually decide this — cost, lock-in, ops — are identical across all three.
@@ -264,8 +272,8 @@ independent cross-check and as the primary for any future capture inside ~4 m.**
   Whether the LiDAR's usable range is ~5 m (pre-15 Pro) or ~10 m (15 Pro and later) changes how
   much weight the depth cross-check deserves, and nothing in the pipeline can currently answer it.
 - **`BarbellDocument` does not exist.** `common/models.py` defines `JointId`, `Skeleton` and
-  `PoseDocument`, and nothing for the bar. S7 needs the analogous model plus a storage layout
-  (`s7_barbell_output/<capture path>/barbell.json`, write-once, per `pose_storage.py`), and a
+  `PoseDocument`, and nothing for the bar. S5 needs the analogous model plus a storage layout
+  (`s5_barbell_output/<capture path>/barbell.json`, write-once, per `pose_storage.py`), and a
   matching `barbell.schema.json` under `powerflow-ui/docs/schema-normalized/` to close the loop
   with the UI's `lift.bar` block. Separate issue; not this one.
 - **Subject-bar identification** (C3) is a UI concern at inference and a recorded flag in the
@@ -281,12 +289,12 @@ independent cross-check and as the primary for any future capture inside ~4 m.**
 
 - **Yaw is still uncorrected — and the bar is the fix.** S3 removes tilt and roll but never yaw,
   so on an oblique August capture the floor-frame's horizontal axes are the camera's, not the
-  athlete's; `S5-pose-model-recommendation.md` already warns that reading horizontal components as
+  athlete's; `S6-pose-model-recommendation.md` already warns that reading horizontal components as
   sagittal displacement is wrong by an unrecorded factor. Vertical bar height, velocity and
   acceleration — what `docs/requirements.md` actually asks for — are unaffected. Horizontal bar
   drift is **not trustworthy on August footage today**. The opportunity: two plate centres define
   the bar's direction in the image, and the bar is the athlete's mediolateral axis by
-  construction, so S7's own output is a candidate yaw reference for the whole capture. Worth a
+  construction, so S5's own output is a candidate yaw reference for the whole capture. Worth a
   spike; out of scope for #121.
 - **New dependency approval.** Per `powerflow-pipeline/CLAUDE.md`, nothing here should be
   installed without an explicit decision. The runtime cost of this recommendation is deliberately
@@ -324,7 +332,7 @@ independent cross-check and as the primary for any future capture inside ~4 m.**
 - [Tau-J/rtmlib](https://github.com/Tau-J/rtmlib) — Apache-2.0; runs RTMDet/YOLOX/RF-DETR ONNX models through `onnxruntime` with no `mmcv`/`mmdet`/`mmpose` install. Already a dependency of this repo.
 - [Peterande/D-FINE](https://github.com/Peterande/D-FINE) — Apache-2.0 code; D-FINE-S 48.5% COCO AP; repo states Objects365-pretrained checkpoints "should not be assumed to be commercially cleared under the D-FINE license".
 - [AILab-CVC/YOLO-World](https://github.com/AILab-CVC/YOLO-World) — GPL-3.0; copyleft, unsuitable for a closed-source client.
-- [Ultralytics license](https://www.ultralytics.com/license) — AGPL-3.0 by default; rejected on the same grounds as in [`S5-pose-model-recommendation.md`](S5-pose-model-recommendation.md).
+- [Ultralytics license](https://www.ultralytics.com/license) — AGPL-3.0 by default; rejected on the same grounds as in [`S6-pose-model-recommendation.md`](S6-pose-model-recommendation.md).
 - [IDEA-Research/GroundingDINO](https://github.com/IDEA-Research/GroundingDINO) — Apache-2.0; weights trained on O365/GoldG/Cap4M (Swin-T) — Objects365 provenance noted.
 - [google/owlv2-base-patch16-ensemble](https://huggingface.co/google/owlv2-base-patch16-ensemble) — Apache-2.0; zero-shot text-conditioned detection; heads fine-tuned on COCO/OpenImages.
 - [facebookresearch/sam2](https://github.com/facebookresearch/sam2) — Apache-2.0 code **and** checkpoints; video mask propagation from a click prompt; SAM 2.1 released 2024-09-29.
@@ -345,5 +353,5 @@ independent cross-check and as the primary for any future capture inside ~4 m.**
 - `../data/s4_crop_output/22 August/Snch/107kgSnch1` frames 26/78/131 and `../data/s4_crop_output/11 July/30kg_Set1/Front` frame 155 — every figure in "What the footage actually is".
 - `powerflow-ui/docs/schema-normalized/lift.schema.json` — the `bar` contract (`com`, `leftEnd`, `rightEnd`) this stage must satisfy.
 - [`5-scaling.md`](5-scaling.md) — the retired Scaling stage, and the two missing measurements C1/C2/C6 now supply.
-- [`S5-pose-model-recommendation.md`](S5-pose-model-recommendation.md) — the licensing precedent, the `Detector2D` seam this stage should mirror, and the subject-selection defect C3 must not depend on.
-- `src/powerflow_pipeline/data/common/pose_storage.py`, `.../common/models.py`, `.../preprocess/pose_model.py` — the storage, model and detector-boundary patterns S7 should follow.
+- [`S6-pose-model-recommendation.md`](S6-pose-model-recommendation.md) — the licensing precedent, the `Detector2D` seam this stage should mirror, and the subject-selection defect C3 must not depend on.
+- `src/powerflow_pipeline/data/common/pose_storage.py`, `.../common/models.py`, `.../preprocess/pose_model.py` — the storage, model and detector-boundary patterns S5 should follow.

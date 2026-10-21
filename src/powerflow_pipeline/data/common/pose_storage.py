@@ -12,7 +12,7 @@ from typing import Any, Final
 from powerflow_pipeline.data.common.errors import PublishError
 from powerflow_pipeline.data.common.models import SKELETON_ID, PoseDocument, skeleton_document
 
-POSE_OUTPUT_DIR: Final = "s5_pose_output"
+POSE_OUTPUT_DIR: Final = "s6_pose_output"
 POSE_FILENAME: Final = "pose.json"
 
 
@@ -80,6 +80,12 @@ def write_pose(path: Path, document: PoseDocument) -> None:
     """Write one camera's pose document for one capture."""
 
     _write_once(path, document.to_document())
+
+
+def write_sidecar(path: Path, payload: dict[str, Any]) -> None:
+    """Write a small document beside a pose, under the same write-once rule."""
+
+    _write_once(path, payload)
 
 
 def read_pose(path: Path) -> PoseDocument:

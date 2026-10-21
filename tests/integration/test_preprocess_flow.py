@@ -261,14 +261,14 @@ def test_the_cli_runs_the_flow(
     assert (s1 / "9 July" / "cnj_45kg_Set1" / "Front" / "cut_sidecar.json").is_file()
 
 
-# --- S5 pose (issue #116) and S6 lift: each opt-in, and independently ---------------------
+# --- S6 pose (issue #116) and S7 lift: each opt-in, and independently ---------------------
 
 
 class _StubDetector:
     """A fixed, valid 2D detection for every frame -- stands in for a real `Detector2D`.
 
     The pixel is `(0, 0)`, the top-left corner, which the synthetic fixture gives usable depth,
-    so S6 can lift it.
+    so S7 can lift it.
     """
 
     def detect(self, rgb_path: Path, n_frames: int) -> dict[JointId, JointPixelSeries]:
@@ -286,7 +286,7 @@ def test_the_run_detects_pose_when_a_detector_is_given(
     make_session_metadata: Any,
 ) -> None:
     raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
-    config = make_config(tmp_path, raw, pose_root=tmp_path / "s5_pose_output")
+    config = make_config(tmp_path, raw, pose_root=tmp_path / "s6_pose_output")
 
     manifest = preprocess(config, detector=_StubDetector())
 
@@ -296,7 +296,7 @@ def test_the_run_detects_pose_when_a_detector_is_given(
     for scan in manifest.scans:
         date, session, camera = scan.scan_id.split("/", 2)
         document = read_pose(pose_path(config.pose_root, Path(date) / session, camera))
-        # S5 stops in pixel space: no depth was read, so no positions were computed.
+        # S6 stops in pixel space: no depth was read, so no positions were computed.
         assert not document.has_positions
 
 
@@ -310,8 +310,8 @@ def test_the_run_lifts_pose_when_a_lift_root_is_given(
     config = make_config(
         tmp_path,
         raw,
-        pose_root=tmp_path / "s5_pose_output",
-        lift_root=tmp_path / "s6_lift_output",
+        pose_root=tmp_path / "s6_pose_output",
+        lift_root=tmp_path / "s7_lift_output",
     )
 
     manifest = preprocess(config, detector=_StubDetector())
@@ -327,7 +327,7 @@ def test_the_run_lifts_pose_when_a_lift_root_is_given(
         assert lifted.has_positions
 
 
-def test_s6_lifts_an_earlier_runs_detections_without_a_detector(
+def test_s7_lifts_an_earlier_runs_detections_without_a_detector(
     tmp_path: Path,
     make_camera: MakeCamera,
     make_meta_template: Any,
@@ -336,14 +336,14 @@ def test_s6_lifts_an_earlier_runs_detections_without_a_detector(
     """The point of splitting the stages: re-run the depth half without re-detecting."""
 
     raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
-    detect_only = make_config(tmp_path, raw, pose_root=tmp_path / "s5_pose_output")
+    detect_only = make_config(tmp_path, raw, pose_root=tmp_path / "s6_pose_output")
     preprocess(detect_only, detector=_StubDetector())
 
     lift_only = make_config(
         tmp_path,
         raw,
-        pose_root=tmp_path / "s5_pose_output",
-        lift_root=tmp_path / "s6_lift_output",
+        pose_root=tmp_path / "s6_pose_output",
+        lift_root=tmp_path / "s7_lift_output",
         overwrite=True,
     )
     manifest = preprocess(lift_only)  # no detector at all
@@ -389,10 +389,46 @@ def test_preprocess_rejects_a_lift_root_without_a_pose_root(
     make_session_metadata: Any,
 ) -> None:
     raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
-    config = make_config(tmp_path, raw, lift_root=tmp_path / "s6_lift_output")
+    config = make_config(tmp_path, raw, lift_root=tmp_path / "s7_lift_output")
 
     with pytest.raises(ValueError, match="nothing to lift"):
         preprocess(config)
+
+
+def test_preprocess_rejects_a_kinematics_root_without_a_pose_root(
+    tmp_path: Path,
+    make_camera: MakeCamera,
+    make_meta_template: Any,
+    make_session_metadata: Any,
+) -> None:
+    raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
+    config = make_config(tmp_path, raw, kinematics_root=tmp_path / "s8_kinematics_output")
+
+    with pytest.raises(ValueError, match="no joints to solve"):
+        preprocess(config)
+
+
+def test_the_run_solves_kinematics_when_a_kinematics_root_is_given(
+    tmp_path: Path,
+    make_camera: MakeCamera,
+    make_meta_template: Any,
+    make_session_metadata: Any,
+) -> None:
+    raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
+    config = make_config(
+        tmp_path,
+        raw,
+        pose_root=tmp_path / "s6_pose_output",
+        kinematics_root=tmp_path / "s8_kinematics_output",
+    )
+
+    manifest = preprocess(config, detector=_StubDetector())
+
+    assert manifest.scans
+    assert all("kinematics" in scan.steps for scan in manifest.scans)
+    assert config.kinematics_root is not None
+    for scan in manifest.scans:
+        assert (config.kinematics_root / scan.scan_id / "joint_hva.json").is_file()
 
 
 # --- the single-camera layout, and a mixed raw root ---------------------------------------

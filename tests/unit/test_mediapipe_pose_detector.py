@@ -5,7 +5,7 @@ only that the real MediaPipe Tasks-API call path (frame decode -> `landmarker.de
 no-pose-found branch) runs to completion, on the pinned `mediapipe==0.10.35`, without the
 macOS 1.x Metal crash this module's own docstring documents, and produces correctly-shaped
 output. Detection quality against real lift footage is a separate, tracked follow-up
-(docs/specs/preprocessing/S5-pose-model-recommendation.md, Risks: "Accuracy validation").
+(docs/specs/preprocessing/S6-pose-model-recommendation.md, Risks: "Accuracy validation").
 """
 
 from __future__ import annotations

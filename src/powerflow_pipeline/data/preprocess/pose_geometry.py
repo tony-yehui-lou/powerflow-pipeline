@@ -1,4 +1,4 @@
-"""Pure maths for S5 Pose's depth-based metric lift. No I/O, no Prefect, no side effects.
+"""Pure maths for S6 Pose's depth-based metric lift. No I/O, no Prefect, no side effects.
 
 Turns one detected joint pixel (in S4 Crop's RGB image space) into a metric 3D point in
 `PoseDocument`'s floor-anchored frame, reusing S3 Retilt's own back-projection
@@ -84,7 +84,7 @@ def to_floor_frame(point_cam: PositionTriple, floor_offset_m: float) -> Position
     """Camera-frame metres -> `PoseDocument`'s floor-anchored frame.
 
     S3 Retilt already rotates the camera so the floor normal is exactly `(0, -1, 0)` in the
-    rectified frame S5 detects joints in (4-retilt.md §4), so no further rotation is needed
+    rectified frame S6 detects joints in (4-retilt.md §4), so no further rotation is needed
     here -- only a translation along Y from the camera's optical centre down to the floor.
     `floor_offset_m` (`PlaneFit`, fitted pre-rectification) is exactly that translation: a
     distance from the origin is invariant under any rotation about that same origin.
@@ -97,7 +97,7 @@ def to_floor_frame(point_cam: PositionTriple, floor_offset_m: float) -> Position
     docstring says "right-handed". Nothing in this codebase computes a cross product or
     otherwise depends on handedness today, and keeping X-right/Z-forward matches what a
     viewer expects from the source video far more than an unmotivated axis flip would --
-    see `docs/specs/preprocessing/S5-pose-model-recommendation.md`'s Risks section.
+    see `docs/specs/preprocessing/S6-pose-model-recommendation.md`'s Risks section.
     """
 
     x, y, z = point_cam

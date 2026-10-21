@@ -15,7 +15,7 @@ SAM 2 with propagation and merges the result into the capture's existing `masks/
 Subject plates keep ids 1-2 untouched; the former static plates become ids 3..N. The merge is
 reversible by dropping ids >= 3, so the subject annotation can never be damaged by a bad run.
 
-See docs/specs/preprocessing/S7-barbell-annotation-guide.md §0.
+See docs/specs/preprocessing/S5-barbell-annotation-guide.md §0.
 """
 
 from __future__ import annotations

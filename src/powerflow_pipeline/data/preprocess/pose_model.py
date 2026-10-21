@@ -1,8 +1,8 @@
-"""The joint-detection model boundary for S5 Pose (GitHub issue #118, "Find a Suitable Model").
+"""The joint-detection model boundary for S6 Pose (GitHub issue #118, "Find a Suitable Model").
 
-`Detector2D.detect` is the whole seam: S5 Pose locates joints in pixel space and stops there.
-The metric lift to floor-frame metres is S6 Lift's job (`pose_lift.py`, `tasks/lift.py`), which
-reads S5's published document rather than being composed into the detector. Keeping them apart
+`Detector2D.detect` is the whole seam: S6 Pose locates joints in pixel space and stops there.
+The metric lift to floor-frame metres is S7 Lift's job (`pose_lift.py`, `tasks/lift.py`), which
+reads S6's published document rather than being composed into the detector. Keeping them apart
 means a detector can be swapped, or re-run, without touching depth -- and the depth lift can be
 re-run without paying for detection again, which on RTMPose is most of the wall clock.
 """
@@ -46,9 +46,9 @@ class Detector2D(Protocol):
 def to_pixel_only_series(
     pixel_series: dict[JointId, JointPixelSeries], n_frames: int
 ) -> dict[JointId, JointSeries]:
-    """Wrap a detector's 2D output as the `JointSeries` S5 publishes, with no positions.
+    """Wrap a detector's 2D output as the `JointSeries` S6 publishes, with no positions.
 
-    `position` is `None` for the whole series rather than a tuple of `None`s: S5 did not fail
+    `position` is `None` for the whole series rather than a tuple of `None`s: S6 did not fail
     to place these joints, it never computes positions at all. See `JointSeries`.
 
     The `Detector2D` contract (all 15 joints, each series `n_frames` long) is enforced here,
