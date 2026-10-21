@@ -54,6 +54,17 @@ class PreprocessConfig(BaseModel):
     # Unset skips the stage; setting it without `pose_root` is rejected, since there would be
     # nothing to lift.
     lift_root: Path | None = None
+    # S8 Kinematics is optional too: unset skips it. It reads S6's published document (not S7's:
+    # no depth), so setting it without `pose_root` is rejected. With `barbell_root` the hands
+    # anchor the skeleton to the bar; without it, the grounded feet alone anchor it.
+    kinematics_root: Path | None = None
+    # S5's barbell detections, per capture under a root mirroring the raw layout. When set, S6
+    # corrects both wrists against the bar the hands hold (`wrist_refine.py`): overhead the far
+    # wrist is occluded and the detector's guess jumps hundreds of pixels. Unset leaves S6's
+    # wrists exactly as detected.
+    barbell_root: Path | None = None
+    # Cap/collar detections below this score are not used to place the bar.
+    barbell_min_score: float = Field(default=0.5, ge=0.0, le=1.0)
     # Reuse whatever S6 already published in `pose_root` instead of re-running detection.
     # `pose_root` names the S6 tree either way -- written when S6 runs, read when it doesn't --
     # so lifting an earlier run's detections is `skip_detect` plus a `lift_root`.

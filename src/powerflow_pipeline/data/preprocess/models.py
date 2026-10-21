@@ -157,10 +157,18 @@ class AthleteMeta(BaseModel):
     measureDate: str | None = None  # the template's key, kept verbatim
     height_in_cm: float | None = None
     weight_in_kg: float | None = None
+    body_fat_percentage: float | None = None
     tibia_in_cm: float | None = None
     femur_in_cm: float | None = None
     torso_in_cm: float | None = None
     armspan_in_cm: float | None = None
+    shoulder_width_in_cm: float | None = None
+    # Added for S8's skeleton solve (S8-joint-hva-draft3.md §2.3); each turns a fitted bone or
+    # anchor into a measured one.
+    upper_arm_in_cm: float | None = None
+    forearm_in_cm: float | None = None
+    hip_width_in_cm: float | None = None
+    ankle_height_in_cm: float | None = None
 
 
 class SessionRecord(BaseModel):

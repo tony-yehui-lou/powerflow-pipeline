@@ -209,3 +209,57 @@ def test_skip_detect_builds_no_detector_so_s7_can_reuse_an_earlier_run(
     assert detector is None  # no checkpoint is loaded at all
     assert config.pose_root == tmp_path / "s6"  # still names the tree S7 reads
     assert config.lift_root == tmp_path / "s7"
+
+
+def test_barbell_flag_points_s6_at_the_barbell_detections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _capture_flow_call(monkeypatch)
+    (tmp_path / "raw").mkdir()
+
+    result = runner.invoke(app, _preprocess_args(tmp_path, "--barbell", str(tmp_path / "s5")))
+
+    assert result.exit_code == 0, result.output
+    config, _ = calls[0]
+    assert config.barbell_root == tmp_path / "s5"
+    assert config.barbell_min_score == 0.5
+
+
+def test_without_barbell_flag_s6_wrists_are_left_as_detected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _capture_flow_call(monkeypatch)
+    (tmp_path / "raw").mkdir()
+
+    result = runner.invoke(app, _preprocess_args(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    config, _ = calls[0]
+    assert config.barbell_root is None
+
+
+def test_kinematics_flag_enables_s8(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _capture_flow_call(monkeypatch)
+    (tmp_path / "raw").mkdir()
+
+    result = runner.invoke(
+        app,
+        _preprocess_args(tmp_path, "--kinematics", str(tmp_path / "s8")),
+    )
+
+    assert result.exit_code == 0, result.output
+    config, _ = calls[0]
+    assert config.kinematics_root == tmp_path / "s8"
+
+
+def test_without_kinematics_flag_s8_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _capture_flow_call(monkeypatch)
+    (tmp_path / "raw").mkdir()
+
+    result = runner.invoke(app, _preprocess_args(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    config, _ = calls[0]
+    assert config.kinematics_root is None

@@ -82,6 +82,12 @@ def write_pose(path: Path, document: PoseDocument) -> None:
     _write_once(path, document.to_document())
 
 
+def write_sidecar(path: Path, payload: dict[str, Any]) -> None:
+    """Write a small document beside a pose, under the same write-once rule."""
+
+    _write_once(path, payload)
+
+
 def read_pose(path: Path) -> PoseDocument:
     """Load a stored pose document, revalidating every invariant on the way in."""
 

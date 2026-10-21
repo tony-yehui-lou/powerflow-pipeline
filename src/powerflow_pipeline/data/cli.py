@@ -86,6 +86,28 @@ def preprocess(
             ),
         ),
     ] = None,
+    kinematics_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--kinematics",
+            help=(
+                "Where S8 publishes joint_hva.json: every joint's 3D position and height, solved "
+                "from S6's 2D pose, the lifter's body measurements (metadata.yaml athlete:), the "
+                "bar (--barbell) and the floor. Needs --pose. Reads no depth."
+            ),
+        ),
+    ] = None,
+    barbell_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--barbell",
+            help=(
+                "S5's barbell detections (a root mirroring the raw layout, holding "
+                "predictions.json per capture). With --pose, S6 corrects both wrists against "
+                "the bar the hands hold; without it, wrists are left exactly as detected."
+            ),
+        ),
+    ] = None,
     skip_detect: Annotated[
         bool,
         typer.Option(
@@ -145,7 +167,8 @@ def preprocess(
 ) -> None:
     """Ingest a raw capture (S0), cut it to the lift window (S1), rotate it (S2),
     retilt it level with the floor (S3), crop it to a stable common region (S4), and,
-    when `--pose` is given, detect joints (S6).
+    when `--pose` is given, detect joints (S6); `--lift` lifts them with LiDAR depth (S7), and
+    `--kinematics` solves them in 3D from the lifter's body measurements instead (S8).
 
     Both raw layouts are handled by one invocation: the directory shape is detected per
     capture from where its operator `metadata.yaml` sits, so there is no layout flag to
@@ -164,6 +187,8 @@ def preprocess(
         output_root=output_root,
         pose_root=pose_root,
         lift_root=lift_root,
+        kinematics_root=kinematics_root,
+        barbell_root=barbell_root,
         skip_detect=skip_detect,
         pose_detector=pose_detector,
         rtmpose_variant=rtmpose_variant,

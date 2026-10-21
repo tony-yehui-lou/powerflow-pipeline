@@ -1,4 +1,5 @@
-"""The preprocess flow: S0 ingest, S1 cut, S2 orient, S3 retilt, S4 crop, S6 pose, S7 lift.
+"""The preprocess flow: S0 ingest, S1 cut, S2 orient, S3 retilt, S4 crop, S6 pose, S7 lift,
+S8 kinematics.
 
 Ordered orchestration only.
 
@@ -34,6 +35,7 @@ from powerflow_pipeline.data.preprocess.tasks.crop import crop_camera
 from powerflow_pipeline.data.preprocess.tasks.cut import cut_camera, resolve_cut_interval
 from powerflow_pipeline.data.preprocess.tasks.discover import discover_captures
 from powerflow_pipeline.data.preprocess.tasks.ingest import ingest_camera
+from powerflow_pipeline.data.preprocess.tasks.kinematics import solve_kinematics_camera
 from powerflow_pipeline.data.preprocess.tasks.lift import lift_pose_camera
 from powerflow_pipeline.data.preprocess.tasks.metadata import write_group_metadata
 from powerflow_pipeline.data.preprocess.tasks.orient import orient_camera
@@ -64,6 +66,10 @@ def preprocess(config: PreprocessConfig, detector: Detector2D | None = None) -> 
         raise ValueError("detector was given but config.pose_root is unset")
     if config.lift_root is not None and config.pose_root is None:
         raise ValueError("config.lift_root is set but config.pose_root is unset: nothing to lift")
+    if config.kinematics_root is not None and config.pose_root is None:
+        raise ValueError(
+            "config.kinematics_root is set but config.pose_root is unset: no joints to solve"
+        )
 
     context = RunContext.create(
         pipeline=PIPELINE,
@@ -160,6 +166,13 @@ def preprocess(config: PreprocessConfig, detector: Detector2D | None = None) -> 
                     derived = {**derived, **lift_step.derived}
                     warnings = warnings + lift_step.warnings
                     file_ops = file_ops + lift_step.file_ops
+
+                if config.kinematics_root is not None:
+                    _, kinematics_step = solve_kinematics_camera(crop_record, config)
+                    steps.append("kinematics")
+                    derived = {**derived, **kinematics_step.derived}
+                    warnings = warnings + kinematics_step.warnings
+                    file_ops = file_ops + kinematics_step.file_ops
             except ScanRejected as rejection:
                 manifest.rejected_scans.append(
                     RejectedScan(

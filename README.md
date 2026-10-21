@@ -117,11 +117,13 @@ Prefect database. Nothing is written to a real Prefect server.
 
 Every capture needs an operator-annotated `metadata.yaml`: **inside** the capture for a
 single-camera trial, or **shared at the session** (one level up) for a two-camera session.
-Two fields are load-bearing — S1 Cut and S3 Retilt reject the camera without them. Everything
-else in the file (`weight_in_kg`, `type`, `result`, `dateTime_epoch`, the whole `athlete:`
-block) is **never read by the pipeline**; it's carried through to the audit trail as
-informational only (and the stage output's own `athlete:` block is always empty — nothing in
-the capture supplies those values).
+Two fields are load-bearing — S1 Cut and S3 Retilt reject the camera without them. Two more
+are read by later, optional stages: `lift.barbell_type` (S6's wrist correction and S8 place the
+bar with it) and the `athlete:` block's measurements (S8 solves the joints in 3D with them — see
+[Athlete measurements](#athlete-measurements)). Everything else (`weight_in_kg`, `type`,
+`result`, `dateTime_epoch`) is **never read by the pipeline**; it's carried through to the audit
+trail as informational only (and the stage output's own `athlete:` block is always empty — S0
+does not parse it; S8 reads the raw file directly).
 
 Single-camera example:
 
@@ -132,9 +134,11 @@ lift:
   weight_in_kg: 50.0                  # informational only, not read
   type: snch                          # informational only, not read
   result: success                     # informational only, not read
-athlete:                              # informational only, not read
-  name: string
-  height_in_cm: 180.0
+  barbell_type: male IWF              # S6/S8: "male IWF" or "female IWF"; never guessed
+athlete:                              # S8 only -- see "Athlete measurements"
+  name: string                        # informational only, not read
+  height_in_cm: float
+  tibia_in_cm: float
   ...
 video:
   floor_region_bottom_left_in_pixels: (0.20, 0.78)  # REQUIRED (S3): normalized (x, y)
@@ -154,6 +158,31 @@ video:
   side_floor_region_bottom_left_in_pixels:  (x0, y0)
   side_floor_region_top_right_in_pixels:    (x1, y1)
 ```
+
+### Athlete measurements
+
+S8 Kinematics (`--kinematics`) reads these from the `athlete:` block. Every field is optional:
+a missing one falls back to a population ratio of `height_in_cm` at a wider tolerance, and a
+template placeholder (`float`, `string`) counts as missing, never as a number. Without any
+usable field S8 falls back to the body-plane solve and warns. Values are centimetres.
+
+| Field | From | To | Constrains |
+|---|---|---|---|
+| `height_in_cm` | floor | top of head, standing | scales every population prior |
+| `tibia_in_cm` | knee joint line | lateral malleolus | ankle – knee |
+| `femur_in_cm` | greater trochanter | knee joint line | knee – hip |
+| `torso_in_cm` | greater trochanter | acromion, same side | hip – shoulder |
+| `shoulder_width_in_cm` | acromion | acromion (biacromial) | shoulder – shoulder |
+| `upper_arm_in_cm` | acromion | lateral epicondyle, arm hanging | shoulder – elbow |
+| `forearm_in_cm` | lateral epicondyle | radial styloid (wrist crease, thumb side), elbow at 90° | elbow – wrist |
+| `hip_width_in_cm` | greater trochanter | greater trochanter (bitrochanteric) | hip – hip |
+| `ankle_height_in_cm` | floor | centre of the lateral malleolus, **in the shoes filmed** | a grounded ankle's height |
+| `armspan_in_cm` | fingertip | fingertip | a consistency check only |
+
+The `torso` and `shoulder_width` endpoints are still to be confirmed against how they were
+actually taped (S8 draft 3, open question 1). A tape runs between palpated landmarks, not the
+detector's keypoints, so each is used with a tolerance; `joint_hva.json` → `bones` records the
+length and source every bone was solved with.
 
 ### Measuring the lift window
 
@@ -257,6 +286,32 @@ The first run against a given detector/variant downloads its pretrained weights 
 `pose.json` per surviving camera plus a single `skeleton.human-v2.json` at the pose root's top
 level, describing the joint topology every `pose.json` under it shares.
 
+### Recipe C — S8 Kinematics on an earlier run's poses
+
+`--skip-detect` reuses the poses already under `--pose`; `--barbell` gives S8 the bar (and S6's
+`wrist_refinement.json` the grip), and the athlete measurements come from each capture's
+`metadata.yaml`:
+
+```bash
+uv run powerflow preprocess \
+  --input      ../data/raw \
+  --records    ../data/s0_ingest_output \
+  --cut        ../data/s1_cut_output \
+  --output     ../data/s2_orient_output \
+  --retilt     ../data/s3_retilt_output \
+  --crop       ../data/s4_crop_output \
+  --pose       ../data/s6_pose_output --skip-detect \
+  --barbell    ../data/annotations/barbell/v3 \
+  --kinematics ../data/s8_kinematics_output \
+  --only       '10 September/*' \
+  --dry-run
+```
+
+Like S6, this re-runs S0–S4. Read the manifest's `kinematics_*` values per capture: the floor
+anchor, frames solved per anchor (`bar+floor`, `floor`, `bar`, or why not), the closure error
+(the shoulders reached from the feet against from the hands), and each bone's source. Heights
+are each frame's solved value as is: nothing is smoothed, regularised or adjusted.
+
 ### Flags
 
 | Flag | Meaning |
@@ -268,6 +323,8 @@ level, describing the joint topology every `pose.json` under it shares.
 | `--retilt` | Where S3 publishes the rectified, floor-levelled streams. |
 | `--crop` | Where S4 publishes the cropped streams. |
 | `--pose` | Where S6 publishes detected 2D poses. Omit to skip S6 entirely. |
+| `--kinematics` | Where S8 publishes `joint_hva.json`: every joint's 3D position and height, solved from S6's 2D pose, the [athlete measurements](#athlete-measurements), the bar (`--barbell`) and the floor. Needs `--pose`; reads no depth. See `docs/specs/preprocessing/S8-joint-hva-draft3.md`. |
+| `--barbell` | S5's barbell detections (`<path>/<capture path>/predictions.json`, e.g. `../data/annotations/barbell/v3`). With `--pose`, S6 corrects both wrists against the bar — see `docs/specs/preprocessing/S6-wrist-refinement.md`. Omit to leave wrists as detected. |
 | `--pose-detector` | `mediapipe` (default) or `rtmpose`. |
 | `--rtmpose-variant` | `lightweight`, `balanced` (default), or `performance` — only with `--pose-detector rtmpose`. |
 | `--only` | Process only captures whose id matches this glob, e.g. `'22 August/Snch/*'`. Keep a two-camera session whole — see below. |
@@ -307,6 +364,8 @@ stage publishes to its own output root instead.
 | Floor-levelled portrait streams + provenance | `<--retilt>/<capture path>/` incl. `retilt_sidecar.json` | S3 |
 | Cropped streams + provenance | `<--crop>/<capture path>/` | S4 |
 | 2D pose document | `<--pose>/<capture path>/pose.json`, plus `<--pose>/skeleton.human-v2.json` once per run | S6 |
+| Wrist correction record | `<--pose>/<capture path>/wrist_refinement.json`, only with `--barbell` | S6 |
+| Joint 3D positions and heights | `<--kinematics>/<capture path>/joint_hva.json` | S8 |
 
 `<capture path>` is the capture's raw-relative path — `11 July/30kg_Set1/Front` or
 `22 August/Snch/110kgSnch1` — so every stage tree matches its raw counterpart byte for byte in

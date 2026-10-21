@@ -205,3 +205,147 @@ def test_ensure_skeleton_published_rewrites_when_overwrite_is_set(tmp_path: Path
     pose_root = tmp_path / "s6"
     ensure_skeleton_published(pose_root, overwrite=False)
     ensure_skeleton_published(pose_root, overwrite=True)  # does not raise
+
+
+# --- wrist correction against the barbell -------------------------------------------------
+
+
+def _bar_scene(record: CameraRecord, n: int) -> dict[str, list[tuple[float, float]]]:
+    """A level bar at rest in front of `record`'s camera, its hands, and their wrists."""
+
+    import math
+
+    from powerflow_pipeline.data.preprocess.bar_geometry import BAR_TYPES, project
+
+    bar = BAR_TYPES["male IWF"]
+    k = record.intrinsics
+    a = (math.sin(math.radians(38.6)), 0.0, math.cos(math.radians(38.6)))
+    centre = (-150.0, 1150.0, 2777.0)
+
+    def at(d: float, dy: float = 0.0) -> tuple[float, float]:
+        return project((centre[0] + d * a[0], centre[1] + d * a[1] + dy, centre[2] + d * a[2]), k)
+
+    return {
+        "cap": [at(-bar.cap_to_centre_mm)] * n,
+        "collar": [at(bar.cap_to_collar_mm - bar.cap_to_centre_mm)] * n,
+        "near": [at(-460.0, -40.0)] * n,
+        "far": [at(460.0, -40.0)] * n,
+    }
+
+
+def _write_predictions(
+    config: PreprocessConfig, record: CameraRecord, scene: dict[str, list[tuple[float, float]]]
+) -> Path:
+    import json
+
+    def box(p: tuple[float, float], score: float) -> dict[str, object]:
+        return {"box": [p[0] - 5, p[1] - 5, p[0] + 5, p[1] + 5], "score": score}
+
+    assert config.barbell_root is not None
+    path = config.barbell_root / record.relative / "predictions.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frames = {
+        str(i): {"cap": box(scene["cap"][i], 0.99), "collar": box(scene["collar"][i], 0.95)}
+        for i in range(record.n_frames)
+    }
+    path.write_text(
+        json.dumps({"frame_size": [record.rgb_height, record.rgb_width], "predictions": frames})
+    )
+    return path
+
+
+class _WristModel(_StubModel):
+    """The stub, but with wrists from a scene -- the far one jumped off the bar."""
+
+    def __init__(self, scene: dict[str, list[tuple[float, float]]]) -> None:
+        super().__init__()
+        self.scene = scene
+
+    def detect(self, rgb_path: Path, n_frames: int) -> dict[JointId, JointPixelSeries]:
+        joints = super().detect(rgb_path, n_frames)
+        near = [(round(x), round(y)) for x, y in self.scene["near"][:n_frames]]
+        far = [(round(x) - 300, round(y) + 300) for x, y in self.scene["far"][:n_frames]]
+        joints["rightWrist"] = JointPixelSeries(tuple(near), tuple(0.9 for _ in near))
+        joints["leftWrist"] = JointPixelSeries(tuple(far), tuple(0.3 for _ in far))
+        return joints
+
+
+def _declare_bar(record: CameraRecord) -> None:
+    text = record.metadata_path.read_text()
+    record.metadata_path.write_text(text.replace("lift:\n", "lift:\n  barbell_type: male IWF\n", 1))
+
+
+def _wrist_session(
+    tmp_path: Path, make_camera: MakeCamera, make_session_metadata: MakeSessionMetadata
+) -> tuple[PreprocessConfig, CameraRecord]:
+    raw = _make_pose_session(tmp_path, make_camera, make_session_metadata)
+    config = make_config(tmp_path, retilt_min_floor_points=10, barbell_root=tmp_path / "s5")
+    return config, _build_crop_record(raw, config)
+
+
+def test_wrists_without_barbell_detections_publish_unchanged_with_a_warning(
+    tmp_path: Path, make_camera: MakeCamera, make_session_metadata: MakeSessionMetadata
+) -> None:
+    config, record = _wrist_session(tmp_path, make_camera, make_session_metadata)
+
+    _, step = detect_pose_camera.fn(record, config, _StubModel())
+
+    destination = pose_path(config.pose_root, record.relative.parent, record.relative.name)
+    assert destination.is_file()
+    assert not (destination.parent / "wrist_refinement.json").exists()
+    assert any("no barbell detections" in w for w in step.warnings)
+
+
+def test_wrists_without_a_declared_bar_are_not_guessed(
+    tmp_path: Path, make_camera: MakeCamera, make_session_metadata: MakeSessionMetadata
+) -> None:
+    config, record = _wrist_session(tmp_path, make_camera, make_session_metadata)
+    _write_predictions(config, record, _bar_scene(record, record.n_frames))
+
+    _, step = detect_pose_camera.fn(record, config, _StubModel())
+
+    assert any("barbell type" in w for w in step.warnings)
+
+
+def test_wrists_with_too_few_frames_for_the_grip_warn(
+    tmp_path: Path, make_camera: MakeCamera, make_session_metadata: MakeSessionMetadata
+) -> None:
+    config, record = _wrist_session(tmp_path, make_camera, make_session_metadata)
+    _write_predictions(config, record, _bar_scene(record, record.n_frames))
+    _declare_bar(record)
+
+    _, step = detect_pose_camera.fn(record, config, _WristModel(_bar_scene(record, 99)))
+
+    assert any("grip" in w for w in step.warnings)
+
+
+def test_wrists_are_corrected_against_the_bar_and_recorded(
+    tmp_path: Path,
+    make_camera: MakeCamera,
+    make_session_metadata: MakeSessionMetadata,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from powerflow_pipeline.data.preprocess import bar_geometry, wrist_refine
+
+    # The synthetic camera is a few dozen pixels across, so 2 px of landmark noise leaves no yaw
+    # measurable and only four frames exist; both limits are the geometry's own tests' business.
+    monkeypatch.setattr(bar_geometry, "YAW_SIGMA_MAX_DEG", float("inf"))
+    monkeypatch.setattr(wrist_refine, "MIN_GRIP_FRAMES", 1)
+    config, record = _wrist_session(tmp_path, make_camera, make_session_metadata)
+    scene = _bar_scene(record, 99)
+    _write_predictions(config, record, scene)
+    _declare_bar(record)
+
+    _, step = detect_pose_camera.fn(record, config, _WristModel(scene))
+
+    destination = pose_path(config.pose_root, record.relative.parent, record.relative.name)
+    document = read_pose(destination)
+    far = document.joints["leftWrist"].pixel_position[0]
+    assert far is not None
+    assert abs(far[0] - scene["far"][0][0]) <= 2 and abs(far[1] - scene["far"][0][1]) <= 2
+    assert document.joints["leftWrist"].confidence[0] == pytest.approx(0.9)
+
+    sidecar = destination.parent / "wrist_refinement.json"
+    assert sidecar.is_file()
+    assert step.derived["wrist_far"] == "leftWrist"
+    assert step.derived["wrist_far_corrected"] == record.n_frames
