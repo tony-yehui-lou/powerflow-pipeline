@@ -3,7 +3,8 @@
 `docs/specs/preprocessing/S8-joint-hva-draft3.md` §6. Pure: every input arrives already read
 (`tasks/kinematics.py` does the I/O), so the whole document is testable against a synthetic
 lift. Height only: each value is the solved position's height above the floor on that frame,
-with no smoothing, regularisation or adjustment.
+with no smoothing, regularisation or adjustment. Joint and segment angles come from the same
+solved points (`joint_angles`, `S8-joint-angles-draft3.md` §4), on `constrained` frames only.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from typing import Any, Final, Literal
 
 from powerflow_pipeline.data.common.models import HUMAN_SKELETON, JointId, PoseDocument
 from powerflow_pipeline.data.preprocess import athlete_input as ai
+from powerflow_pipeline.data.preprocess import joint_angles as ja
 from powerflow_pipeline.data.preprocess import skeleton_solve as ss
 from powerflow_pipeline.data.preprocess.bar_geometry import (
     BarPose,
@@ -27,13 +29,20 @@ from powerflow_pipeline.data.preprocess.bar_geometry import (
 from powerflow_pipeline.data.preprocess.body_plane import Side, lateral_offsets, place_on_plane
 from powerflow_pipeline.data.preprocess.models import Intrinsics
 
-SCHEMA_VERSION: Final = "1.0.0"
+# 1.1.0 added the joint angles, `segments`, `angleConvention` and `frameStatus.angleAxis`.
+SCHEMA_VERSION: Final = "1.1.0"
 METHOD_SPEC: Final = "docs/specs/preprocessing/S8-joint-hva-draft3.md"
 
 FrameMethod = Literal["constrained", "bar_plane"]
 
 # A height whose posterior sigma exceeds this is kept but flagged `uncertain` (draft 3 §3.7).
 MAX_HEIGHT_SIGMA_MM: Final = 50.0
+
+ANGLE_CONVENTION: Final = {
+    "joint": "included; 180 = straight; > 180 = past straight (knee, hip, elbow)",
+    "shoulder": "included trunk-to-upper-arm; (-90, 270]; 0 = arm along trunk, positive = forward",
+    "segment": "inclination from vertical; positive = proximal end ahead of distal end",
+}
 
 CLAVICLES: Final[dict[JointId, JointId]] = {
     "leftClavicle": "leftShoulder",
@@ -205,7 +214,7 @@ def build(inputs: Inputs) -> Built:
 
     reasons = [fit.reason if isinstance(fit, ss.NoFit) else None for fit in fits]
     y_floor = anchor.y_floor_mm
-    joints_out: dict[str, dict[str, list[Any]]] = {}
+    joints_out: dict[str, dict[str, Any]] = {}
     w = inputs.clavicle_shoulder_weight
     for joint in HUMAN_SKELETON.joints:
         position: list[list[float] | None] = []
@@ -240,6 +249,41 @@ def build(inputs: Inputs) -> Built:
             "source": source,
             "flags": flags,
         }
+
+    angles, axes = _angles(inputs, fits, method, joints_out)
+    for joint in HUMAN_SKELETON.joints:
+        series = [frame.joints[joint] for frame in angles] if joint in ja.JOINT_ANGLES else None
+        joints_out[joint].update(
+            {
+                "angleDeg": None if series is None else [_deg(a.deg) for a in series],
+                "angleSource": None if series is None else [a.source for a in series],
+                "angleFlags": None if series is None else [list(a.flags) for a in series],
+            }
+        )
+    segments = {
+        name: {
+            "inclinationDeg": [_deg(frame.segments[name].deg) for frame in angles],
+            "source": [frame.segments[name].source for frame in angles],
+            "flags": [list(frame.segments[name].flags) for frame in angles],
+        }
+        for name in ja.SEGMENTS
+    }
+    axis_conflicts = sum(1 for axis in axes if axis is not None and axis.conflict)
+    floor_only = sum(
+        1
+        for fit, axis in zip(fits, axes, strict=True)
+        if axis is not None and isinstance(fit, ss.FrameFit) and "bar" not in fit.anchors
+    )
+    if floor_only:
+        warnings.append(
+            f"angles: {floor_only} frames were solved from the floor alone (floor_only): their "
+            "angles may be S8's mirror solution, so read them against bar-anchored frames"
+        )
+    if axis_conflicts:
+        warnings.append(
+            f"angles: S6's near side and the hips disagree on left and right on {axis_conflicts} "
+            "frames (axis_conflict): the near side or S6's left/right hips may be swapped"
+        )
 
     solved_fits = [fit for fit in fits if isinstance(fit, ss.FrameFit)]
     by_anchor = Counter(
@@ -301,8 +345,11 @@ def build(inputs: Inputs) -> Built:
                 else None
                 for fit in fits
             ],
+            "angleAxis": [None if axis is None else axis.source for axis in axes],
         },
+        "angleConvention": dict(ANGLE_CONVENTION),
         "joints": joints_out,
+        "segments": segments,
     }
     derived: dict[str, Any] = {
         "kinematics_method": method,
@@ -318,8 +365,65 @@ def build(inputs: Inputs) -> Built:
         "kinematics_branch_ambiguous": sum(1 for fit in solved_fits if fit.branch_ambiguous),
         "kinematics_ground_conflict": sum(1 for fit in solved_fits if fit.ground_conflict),
         "kinematics_bone_sources": {b: length.source for b, length in lengths.items()},
+        "angles_frames_by_joint": {
+            joint: sum(1 for frame in angles if frame.joints[joint].deg is not None)
+            for joint in ja.JOINT_ANGLES
+        },
+        "angles_axis": dict(
+            sorted(Counter("none" if a is None else a.source or "none" for a in axes).items())
+        ),
+        "angles_off_sagittal": sum(
+            1 for frame in angles for a in frame.joints.values() if "off_sagittal" in a.flags
+        ),
+        "angles_axis_conflict": axis_conflicts,
+        "angles_floor_only": floor_only,
     }
     return Built(document=document, derived=derived, warnings=warnings)
+
+
+def _deg(value: float | None) -> float | None:
+    return None if value is None else round(value, 1)
+
+
+def _angles(
+    inputs: Inputs,
+    fits: Sequence[ss.FrameFit | ss.NoFit],
+    method: FrameMethod | None,
+    joints_out: dict[str, dict[str, Any]],
+) -> tuple[list[ja.FrameAngles], list[ja.Axis | None]]:
+    """Each frame's angles and left-right axis; `bar_plane` and unsolved frames get none (§2.6).
+
+    A `bar_plane` frame's points sit on one plane at fixed lateral offsets, so their angle would
+    be a projected one, which the spec rules out.
+    """
+
+    angles: list[ja.FrameAngles] = []
+    axes: list[ja.Axis | None] = []
+    for i, fit in enumerate(fits):
+        if method != "constrained" or not isinstance(fit, ss.FrameFit):
+            angles.append(ja.NULL_FRAME)
+            axes.append(None)
+            continue
+        bar = inputs.bars[i]
+        axis = ja.left_right_axis(
+            None if bar is None else bar.axis,
+            inputs.near_side,
+            fit.points.get("leftHip"),
+            fit.points.get("rightHip"),
+        )
+        flags = {joint: joints_out[joint]["flags"][i] for joint in fit.points}
+        angles.append(
+            ja.frame_angles(
+                fit.points,
+                fit.source,
+                flags,
+                axis,
+                branch_ambiguous=fit.branch_ambiguous,
+                floor_only="bar" not in fit.anchors,
+            )
+        )
+        axes.append(axis)
+    return angles, axes
 
 
 def _joint_at(

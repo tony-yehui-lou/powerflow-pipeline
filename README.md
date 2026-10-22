@@ -323,7 +323,7 @@ are each frame's solved value as is: nothing is smoothed, regularised or adjuste
 | `--retilt` | Where S3 publishes the rectified, floor-levelled streams. |
 | `--crop` | Where S4 publishes the cropped streams. |
 | `--pose` | Where S6 publishes detected 2D poses. Omit to skip S6 entirely. |
-| `--kinematics` | Where S8 publishes `joint_hva.json`: every joint's 3D position and height, solved from S6's 2D pose, the [athlete measurements](#athlete-measurements), the bar (`--barbell`) and the floor. Needs `--pose`; reads no depth. See `docs/specs/preprocessing/S8-joint-hva-draft3.md`. |
+| `--kinematics` | Where S8 publishes `joint_hva.json`: every joint's 3D position, height and angle, solved from S6's 2D pose, the [athlete measurements](#athlete-measurements), the bar (`--barbell`) and the floor. Needs `--pose`; reads no depth. See `docs/specs/preprocessing/S8-joint-hva-draft3.md` and, for the angles, `S8-joint-angles-draft3.md`. |
 | `--barbell` | S5's barbell detections (`<path>/<capture path>/predictions.json`, e.g. `../data/annotations/barbell/v3`). With `--pose`, S6 corrects both wrists against the bar — see `docs/specs/preprocessing/S6-wrist-refinement.md`. Omit to leave wrists as detected. |
 | `--pose-detector` | `mediapipe` (default) or `rtmpose`. |
 | `--rtmpose-variant` | `lightweight`, `balanced` (default), or `performance` — only with `--pose-detector rtmpose`. |
@@ -365,7 +365,7 @@ stage publishes to its own output root instead.
 | Cropped streams + provenance | `<--crop>/<capture path>/` | S4 |
 | 2D pose document | `<--pose>/<capture path>/pose.json`, plus `<--pose>/skeleton.human-v2.json` once per run | S6 |
 | Wrist correction record | `<--pose>/<capture path>/wrist_refinement.json`, only with `--barbell` | S6 |
-| Joint 3D positions and heights | `<--kinematics>/<capture path>/joint_hva.json` | S8 |
+| Joint 3D positions, heights and angles | `<--kinematics>/<capture path>/joint_hva.json` | S8 |
 
 `<capture path>` is the capture's raw-relative path — `11 July/30kg_Set1/Front` or
 `22 August/Snch/110kgSnch1` — so every stage tree matches its raw counterpart byte for byte in
