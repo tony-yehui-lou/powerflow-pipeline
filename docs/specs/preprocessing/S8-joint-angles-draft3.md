@@ -449,3 +449,19 @@ Checks:
 - **The bar's ends:** S5 detects the near cap and the far collar (§2.1).
 - **`bar_plane` frames:** they stay null. They occur only in captures with no usable
   measurements, which is now only 11 July.
+
+---
+
+## Feedback (2026-10-22): the stage's home
+
+- **User:** preprocess ends at S4. S5 and S6 are the detection phase. S8 and S9 are the
+  quantitative-analysis phase.
+- **Decided** in `docs/superpowers/specs/2026-10-22-pipeline-phase-split-design.md`: S8
+  Kinematics, with these angles, moves into a new **`analyze`** pipeline alongside S9 Phase.
+  S-numbers stay global.
+- **For draft 4:**
+  - §5's code layout moves from `preprocess/` to `analyze/`; `bar_geometry` (the bar axis of
+    §2.1) moves to `common/`;
+  - references to `S8-joint-hva-draft3.md` point at draft 4;
+  - the "no CLI flag" note refers to `powerflow analyze --kinematics`.
+  Nothing about the angles changes.

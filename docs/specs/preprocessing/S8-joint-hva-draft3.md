@@ -545,3 +545,24 @@ Take all the `athlete:` fields in the same session by §2.3's definitions, and r
   - where two solutions fit equally well (a floor-only frame's mirror pair), the one nearer the
     previous frame's solution is kept, and the frame is flagged `branch_ambiguous`.
 - **Kept:** the closure error is a per-frame consistency check. It does not change any height.
+
+---
+
+## Feedback (2026-10-22): the stage's home
+
+- **User:** preprocess ends at S4. S5 and S6 are the detection phase. S8 and S9 are the
+  quantitative-analysis phase.
+- **Decided** in `docs/superpowers/specs/2026-10-22-pipeline-phase-split-design.md`:
+  - S8 Kinematics moves out of `preprocess` into a new **`analyze`** pipeline, alongside S9
+    Phase. `detect` holds S5 Barbell, S6 Pose and an optional S7 Lift (off by default).
+  - S-numbers stay global. **S8** is no longer a proposal.
+  - The pipelines talk only through published output. S8 reads S0's record, S3's floor, S4's
+    sidecar, S5's `barbell.json` and S6's `pose.json` / `wrist_refinement.json` from disk,
+    never from S4's in-memory record.
+  - Code moves: `athlete_input`, `body_plane`, `skeleton_solve`, `joint_hva` and
+    `tasks/kinematics` to `analyze/`; `bar_geometry` (shared with S6 wrist refinement and S9)
+    to `common/`.
+  - The CLI flag `--kinematics` moves to `powerflow analyze`.
+- **For draft 4:** update the stage header, the inputs and §6's code layout. Also fold in both
+  2026-10-20 feedback rounds above (no velocity or acceleration, no priors, `unseen` joints,
+  no calibration), which draft 3's body still describes as planned.
