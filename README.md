@@ -278,7 +278,7 @@ This re-runs S0–S4 too — S6 isn't a separate pass over existing S4 output, i
 with one more stage attached. Optionally choose the 2D detector:
 
 ```bash
---pose-detector rtmpose --rtmpose-variant balanced   # default: --pose-detector mediapipe
+--pose-detector mediapipe   # default: --pose-detector rtmpose --rtmpose-variant balanced
 ```
 
 The first run against a given detector/variant downloads its pretrained weights into
@@ -365,8 +365,8 @@ are each frame's solved value as is: nothing is smoothed, regularised or adjuste
 | `--barbell-checkpoint` | A promoted S5 model (`scripts/promote_barbell_model.py`). Runs S5 right after S4. Omit to read `--barbell` as already published. See `docs/specs/preprocessing/S5-barbell-detection-stage-draft3.md`. |
 | `--barbell-device` | `auto` (default: mps, then cuda, then cpu), `mps`, `cuda`, or `cpu`. |
 | `--barbell-overlay` | Also publish S5's `overlay.mp4`. |
-| `--pose-detector` | `mediapipe` (default) or `rtmpose`. |
-| `--rtmpose-variant` | `lightweight`, `balanced` (default), or `performance` — only with `--pose-detector rtmpose`. |
+| `--pose-detector` | `rtmpose` (default) or `mediapipe`. |
+| `--rtmpose-variant` | `lightweight`, `balanced` (default), or `performance` — ignored with `--pose-detector mediapipe`. |
 | `--only` | Process only captures whose id matches this glob, e.g. `'22 August/Snch/*'`. Keep a two-camera session whole — see below. |
 | `--rotation` | `cw` (default) or `ccw`. |
 | `--dry-run` | Validate and plan, write nothing. |

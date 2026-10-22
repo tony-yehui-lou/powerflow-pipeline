@@ -9,9 +9,16 @@ import pytest
 from typer.testing import CliRunner
 
 from powerflow_pipeline.data.cli import app
-from powerflow_pipeline.data.preprocess.config import BarbellDevice
+from powerflow_pipeline.data.preprocess.config import (
+    BarbellDevice,
+    PoseDetector,
+    PreprocessConfig,
+)
 
 runner = CliRunner()
+
+# `cli._build_detector` imports RTMPose lazily, so it is replaced at its own module.
+RTMPOSE_DETECTOR = "powerflow_pipeline.data.preprocess.rtmpose_detector.RTMPoseDetector"
 
 
 def test_help_lists_the_command_group() -> None:
@@ -58,9 +65,10 @@ def test_preprocess_command_skips_pose_when_pose_flag_omitted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def _fail_if_constructed(*args: Any, **kwargs: Any) -> None:
-        raise AssertionError("MediaPipePoseDetector should not be constructed without --pose")
+        raise AssertionError("no pose detector should be constructed without --pose")
 
     monkeypatch.setattr("powerflow_pipeline.data.cli.MediaPipePoseDetector", _fail_if_constructed)
+    monkeypatch.setattr(RTMPOSE_DETECTOR, _fail_if_constructed)
     raw = tmp_path / "raw"
     raw.mkdir()
 
@@ -95,13 +103,13 @@ def test_preprocess_command_accepts_pose_root_and_builds_a_detector(
         """Satisfies `Detector2D` structurally -- the flow's own parameter validation
         rejects anything that doesn't, which is the contract worth asserting here."""
 
-        def __init__(self) -> None:
-            calls.append("detector-built")
+        def __init__(self, variant: str, **kwargs: Any) -> None:
+            calls.append(f"rtmpose-{variant}")
 
         def detect(self, rgb_path: Path, n_frames: int) -> dict[str, object]:
             return {}
 
-    monkeypatch.setattr("powerflow_pipeline.data.cli.MediaPipePoseDetector", _BuiltDetector)
+    monkeypatch.setattr(RTMPOSE_DETECTOR, _BuiltDetector)
     raw = tmp_path / "raw"
     raw.mkdir()
 
@@ -127,7 +135,7 @@ def test_preprocess_command_accepts_pose_root_and_builds_a_detector(
     )
 
     assert result.exit_code == 0, result.output
-    assert calls == ["detector-built"]
+    assert calls == ["rtmpose-balanced"]  # RTMPose, balanced, without any detector flag
 
 
 def _preprocess_args(tmp_path: Path, *extra: str) -> list[str]:
@@ -152,6 +160,11 @@ def _preprocess_args(tmp_path: Path, *extra: str) -> list[str]:
 
 
 class _StubDetector:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+
+class _StubMediaPipe:
     pass
 
 
@@ -164,7 +177,8 @@ def _capture_flow_call(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any, Any]]
         calls.append((config, detector))
         return type("Manifest", (), {"scans": [], "rejected_scans": []})()
 
-    monkeypatch.setattr("powerflow_pipeline.data.cli.MediaPipePoseDetector", _StubDetector)
+    monkeypatch.setattr("powerflow_pipeline.data.cli.MediaPipePoseDetector", _StubMediaPipe)
+    monkeypatch.setattr(RTMPOSE_DETECTOR, _StubDetector)
     monkeypatch.setattr("powerflow_pipeline.data.cli.preprocess_flow", _record)
     return calls
 
@@ -306,3 +320,42 @@ def test_without_barbell_checkpoint_s5_does_not_run(
     assert config.barbell_checkpoint is None
     assert config.barbell_device == BarbellDevice.AUTO
     assert config.barbell_render_overlay is False
+
+
+def test_rtmpose_is_the_default_pose_detector(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _capture_flow_call(monkeypatch)
+    (tmp_path / "raw").mkdir()
+
+    result = runner.invoke(app, _preprocess_args(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    config, detector = calls[0]
+    assert config.pose_detector == PoseDetector.RTMPOSE
+    assert isinstance(detector, _StubDetector)
+
+
+def test_mediapipe_is_still_selectable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _capture_flow_call(monkeypatch)
+    (tmp_path / "raw").mkdir()
+
+    result = runner.invoke(app, _preprocess_args(tmp_path, "--pose-detector", "mediapipe"))
+
+    assert result.exit_code == 0, result.output
+    config, detector = calls[0]
+    assert config.pose_detector == PoseDetector.MEDIAPIPE
+    assert isinstance(detector, _StubMediaPipe)
+
+
+def test_the_config_defaults_to_rtmpose_for_callers_that_bypass_the_cli(tmp_path: Path) -> None:
+    config = PreprocessConfig(
+        raw_root=tmp_path,
+        record_root=tmp_path,
+        cut_root=tmp_path,
+        retilt_root=tmp_path,
+        crop_root=tmp_path,
+        output_root=tmp_path,
+    )
+
+    assert config.pose_detector == PoseDetector.RTMPOSE

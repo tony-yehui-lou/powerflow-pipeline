@@ -22,22 +22,23 @@ app = typer.Typer(help="PowerFlow data pipelines.", no_args_is_help=True)
 
 
 def _build_detector(config: PreprocessConfig) -> Detector2D:
-    """The 2D detector `config.pose_detector` selects.
+    """The 2D detector `config.pose_detector` selects; RTMPose unless MediaPipe is asked for.
 
     `rtmpose_detector` is imported lazily: it pulls in `rtmlib`/`onnxruntime`, and a run that
-    never asks for RTMPose should not pay for loading them.
+    never builds a detector should not pay for loading them.
     """
 
-    if config.pose_detector is PoseDetector.RTMPOSE:
-        from powerflow_pipeline.data.preprocess.rtmpose_detector import RTMPoseDetector
+    if config.pose_detector is PoseDetector.MEDIAPIPE:
+        return MediaPipePoseDetector()
 
-        return RTMPoseDetector(
-            config.rtmpose_variant.value,
-            det_frequency=config.rtmpose_det_frequency,
-            clavicle_shoulder_weight=config.rtmpose_clavicle_shoulder_weight,
-            use_depth_for_subject=config.rtmpose_subject_depth,
-        )
-    return MediaPipePoseDetector()
+    from powerflow_pipeline.data.preprocess.rtmpose_detector import RTMPoseDetector
+
+    return RTMPoseDetector(
+        config.rtmpose_variant.value,
+        det_frequency=config.rtmpose_det_frequency,
+        clavicle_shoulder_weight=config.rtmpose_clavicle_shoulder_weight,
+        use_depth_for_subject=config.rtmpose_subject_depth,
+    )
 
 
 @app.callback()
@@ -143,7 +144,7 @@ def preprocess(
     pose_detector: Annotated[
         PoseDetector,
         typer.Option("--pose-detector", help="Which 2D keypoint model S6 runs."),
-    ] = PoseDetector.MEDIAPIPE,
+    ] = PoseDetector.RTMPOSE,
     rtmpose_variant: Annotated[
         RTMPoseVariant,
         typer.Option("--rtmpose-variant", help="RTMPose speed/accuracy tier."),

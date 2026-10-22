@@ -93,10 +93,10 @@ class PreprocessConfig(BaseModel):
     # `pose_root` names the S6 tree either way -- written when S6 runs, read when it doesn't --
     # so lifting an earlier run's detections is `skip_detect` plus a `lift_root`.
     skip_detect: bool = False
-    # S6 Pose's 2D detector. MediaPipe stays the default until RTMPose beats it on the
-    # measurements in docs/specs/preprocessing/S6-rtmpose-migration.md §6; both stay installed
-    # and selectable so the comparison can be run, and so neither becomes load-bearing.
-    pose_detector: PoseDetector = PoseDetector.MEDIAPIPE
+    # S6 Pose's 2D detector. RTMPose is the default (decided 2026-10-22, ahead of the
+    # measurements in docs/specs/preprocessing/S6-rtmpose-migration.md §6, which are still to
+    # be run). MediaPipe stays installed and selectable so that comparison can still be made.
+    pose_detector: PoseDetector = PoseDetector.RTMPOSE
     # Half-width of the depth patch S7 medians around each joint pixel, in depth pixels. 2
     # gives the 5x5 box S6 used before the split. One depth pixel spans ~7.5 RGB pixels, so
     # this is already wider than a forearm -- see S6-bone-constrained-reconstruction.md.
