@@ -99,6 +99,17 @@ def preprocess(
             ),
         ),
     ] = None,
+    phase_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--phase",
+            help=(
+                "Where S9 publishes phase.json: each rep's events and phase intervals, from S5's "
+                "bar, S8's floor, bones and knees (--kinematics) and S6's grip. Needs "
+                "--kinematics and --barbell. Reads lift.type from metadata.yaml: snch or CnJ."
+            ),
+        ),
+    ] = None,
     barbell_root: Annotated[
         Path | None,
         typer.Option(
@@ -192,7 +203,8 @@ def preprocess(
     retilt it level with the floor (S3), crop it to a stable common region (S4), and,
     when `--barbell-checkpoint` is given, detect the barbell's cap and collar (S5); when
     `--pose` is given, detect joints (S6); `--lift` lifts them with LiDAR depth (S7), and
-    `--kinematics` solves them in 3D from the lifter's body measurements instead (S8).
+    `--kinematics` solves them in 3D from the lifter's body measurements instead (S8), and
+    `--phase` splits each rep into its lift's phases (S9).
 
     Both raw layouts are handled by one invocation: the directory shape is detected per
     capture from where its operator `metadata.yaml` sits, so there is no layout flag to
@@ -212,6 +224,7 @@ def preprocess(
         pose_root=pose_root,
         lift_root=lift_root,
         kinematics_root=kinematics_root,
+        phase_root=phase_root,
         barbell_root=barbell_root,
         barbell_checkpoint=barbell_checkpoint,
         barbell_device=barbell_device,
@@ -237,3 +250,22 @@ def preprocess(
     typer.echo(
         f"processed {len(manifest.scans)} camera(s), rejected {len(manifest.rejected_scans)}"
     )
+
+
+@app.command("phase-eval")
+def phase_eval_command(
+    labels_root: Annotated[
+        Path,
+        typer.Option("--labels", help="Phase labels, e.g. data/annotations/phase/v1."),
+    ],
+    phases_root: Annotated[
+        Path,
+        typer.Option("--phases", help="S9's output, e.g. data/s9_phase_output."),
+    ],
+) -> None:
+    """Score S9's phase.json against hand labels (S9 draft 7 §8.3). Reads only; writes nothing."""
+
+    from powerflow_pipeline.data.preprocess import phase_eval
+
+    report = phase_eval.score(labels_root, phases_root)
+    typer.echo(phase_eval.markdown(report, phase_eval.human_floor(labels_root)))

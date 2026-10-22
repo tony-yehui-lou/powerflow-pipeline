@@ -34,7 +34,7 @@ def kinematics_path(kinematics_root: Path, record: CameraRecord) -> Path:
     return kinematics_root / record.relative / KINEMATICS_FILENAME
 
 
-def _bar_track(
+def bar_track(
     record: CameraRecord, config: PreprocessConfig
 ) -> tuple[list[BarPose | None], list[str]]:
     """S5's bar on every frame it can be placed, or no bar with a warning saying why."""
@@ -61,7 +61,7 @@ def _bar_track(
     return solve_track(detections.caps, detections.collars, record.intrinsics, bar), []
 
 
-def _grip(sidecar_path: Path) -> tuple[frozenset[int], float | None, Any]:
+def read_grip(sidecar_path: Path) -> tuple[frozenset[int], float | None, Any]:
     """S6's hands-on-bar frames, half grip and near side, from `wrist_refinement.json`.
 
     `farCorrected` is exactly the hands-on-bar frames: S6 replaces the far wrist on every one of
@@ -107,8 +107,8 @@ def solve_kinematics_camera(
         return record, StepResult(warnings=[f"kinematics not solved: no S6 pose at {source}"])
 
     pose = read_pose(source)
-    bars, warnings = _bar_track(record, config)
-    hands_on_bar, half_grip, near_side = _grip(source.parent / WRIST_REFINEMENT_FILENAME)
+    bars, warnings = bar_track(record, config)
+    hands_on_bar, half_grip, near_side = read_grip(source.parent / WRIST_REFINEMENT_FILENAME)
     if config.barbell_root is not None and half_grip is None:
         warnings.append("no wrist_refinement.json from S6: the hands are not placed on the bar")
 

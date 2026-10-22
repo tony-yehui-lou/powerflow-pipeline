@@ -438,6 +438,65 @@ def test_the_run_solves_kinematics_when_a_kinematics_root_is_given(
         assert (config.kinematics_root / scan.scan_id / "joint_hva.json").is_file()
 
 
+def test_preprocess_rejects_a_phase_root_without_a_kinematics_root(
+    tmp_path: Path,
+    make_camera: MakeCamera,
+    make_meta_template: Any,
+    make_session_metadata: Any,
+) -> None:
+    raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
+    config = make_config(
+        tmp_path, raw, barbell_root=tmp_path / "s5", phase_root=tmp_path / "s9_phase_output"
+    )
+
+    with pytest.raises(ValueError, match="no kinematics to read"):
+        preprocess(config)
+
+
+def test_preprocess_rejects_a_phase_root_without_a_barbell_root(
+    tmp_path: Path,
+    make_camera: MakeCamera,
+    make_meta_template: Any,
+    make_session_metadata: Any,
+) -> None:
+    raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
+    config = make_config(
+        tmp_path,
+        raw,
+        pose_root=tmp_path / "s6_pose_output",
+        kinematics_root=tmp_path / "s8_kinematics_output",
+        phase_root=tmp_path / "s9_phase_output",
+    )
+
+    with pytest.raises(ValueError, match="no bar to segment"):
+        preprocess(config, detector=_StubDetector())
+
+
+def test_the_run_finds_phases_when_a_phase_root_is_given(
+    tmp_path: Path,
+    make_camera: MakeCamera,
+    make_meta_template: Any,
+    make_session_metadata: Any,
+) -> None:
+    raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
+    config = make_config(
+        tmp_path,
+        raw,
+        pose_root=tmp_path / "s6_pose_output",
+        kinematics_root=tmp_path / "s8_kinematics_output",
+        barbell_root=tmp_path / "s5_barbell_output",
+        phase_root=tmp_path / "s9_phase_output",
+    )
+
+    manifest = preprocess(config, detector=_StubDetector())
+
+    assert manifest.scans
+    for scan in manifest.scans:
+        assert "phase" in scan.steps
+        # The synthetic capture declares no lift.type, so S9 warns rather than guessing.
+        assert any("lift.type" in w for w in scan.warnings)
+
+
 # --- S5 barbell: runs before S6, which reads what it published ---------------------------
 
 

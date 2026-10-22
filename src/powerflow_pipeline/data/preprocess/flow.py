@@ -1,5 +1,5 @@
 """The preprocess flow: S0 ingest, S1 cut, S2 orient, S3 retilt, S4 crop, S5 barbell, S6 pose,
-S7 lift, S8 kinematics.
+S7 lift, S8 kinematics, S9 phase.
 
 Ordered orchestration only.
 
@@ -45,6 +45,7 @@ from powerflow_pipeline.data.preprocess.tasks.kinematics import solve_kinematics
 from powerflow_pipeline.data.preprocess.tasks.lift import lift_pose_camera
 from powerflow_pipeline.data.preprocess.tasks.metadata import write_group_metadata
 from powerflow_pipeline.data.preprocess.tasks.orient import orient_camera
+from powerflow_pipeline.data.preprocess.tasks.phase import detect_phases_camera
 from powerflow_pipeline.data.preprocess.tasks.pose import (
     detect_pose_camera,
     ensure_skeleton_published,
@@ -83,6 +84,14 @@ def preprocess(
     if config.kinematics_root is not None and config.pose_root is None:
         raise ValueError(
             "config.kinematics_root is set but config.pose_root is unset: no joints to solve"
+        )
+    if config.phase_root is not None and config.kinematics_root is None:
+        raise ValueError(
+            "config.phase_root is set but config.kinematics_root is unset: no kinematics to read"
+        )
+    if config.phase_root is not None and config.barbell_root is None:
+        raise ValueError(
+            "config.phase_root is set but config.barbell_root is unset: no bar to segment"
         )
     run_barbell = barbell_detector is not None or config.barbell_checkpoint is not None
     if run_barbell and config.barbell_root is None:
@@ -203,6 +212,13 @@ def preprocess(
                     derived = {**derived, **kinematics_step.derived}
                     warnings = warnings + kinematics_step.warnings
                     file_ops = file_ops + kinematics_step.file_ops
+
+                if config.phase_root is not None:
+                    _, phase_step = detect_phases_camera(crop_record, config)
+                    steps.append("phase")
+                    derived = {**derived, **phase_step.derived}
+                    warnings = warnings + phase_step.warnings
+                    file_ops = file_ops + phase_step.file_ops
             except ScanRejected as rejection:
                 manifest.rejected_scans.append(
                     RejectedScan(

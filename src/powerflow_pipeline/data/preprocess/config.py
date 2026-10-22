@@ -40,6 +40,50 @@ class RotationDirection(StrEnum):
     CCW = "ccw"
 
 
+class CleanAndJerkThresholds(BaseModel):
+    """S9 rules only the clean & jerk uses (S9-phase-intervals-draft7.md §4.1)."""
+
+    # How long the bar must be still, in the rack band, for the rack stand: E4's search start.
+    rack_hold_ms: float = Field(default=300.0, gt=0)
+    # Drop below the rack-stand height that counts as the dip; smaller re-grip bounces don't.
+    dip_mm: float = Field(default=30.0, gt=0)
+
+
+class BandTolerances(BaseModel):
+    """Each S9 height band's tolerance as (below, above) fractions of its centre (§2.2)."""
+
+    knee: tuple[float, float] = (0.20, 0.20)
+    hip: tuple[float, float] = (0.20, 0.20)
+    rack: tuple[float, float] = (0.15, 0.10)
+    overhead: tuple[float, float] = (0.10, 0.10)
+    # Without S6's half grip the arms are assumed vertical, and the overhead band widens below.
+    overhead_below_grip_assumed: float = Field(default=0.25, ge=0, lt=1)
+
+
+class PhaseThresholds(BaseModel):
+    """S9 Phase starting thresholds (§4.1), to be tuned against the labels (§8.4).
+
+    Holds are durations: each capture converts them to frames with its own `tMs` cadence.
+    """
+
+    lift_mm: float = Field(default=20.0, gt=0)
+    lift_hold_ms: float = Field(default=83.0, gt=0)
+    v_rest_mm_s: float = Field(default=50.0, gt=0)
+    # The rack stand's still speed. The final stand is height alone in draft 7 (§1.2), because
+    # 30kg1 and 40kg1 never hold the bar still overhead (§8.1).
+    v_still_mm_s: float = Field(default=150.0, gt=0)
+    # A knee height with a larger sigma is not used, and E1 falls back to the knee band.
+    joint_sigma_max_mm: float = Field(default=50.0, gt=0)
+    # Bar gaps up to this are bridged for velocity only; longer ones make an event there absent.
+    max_gap_ms: float = Field(default=100.0, ge=0)
+    # Zero-phase low-pass on bar height before differencing (Open question 7: 4-10 Hz).
+    filter_cutoff_hz: float = Field(default=8.0, gt=0)
+    # The bar's rest height is the median over this many opening frames, as S8's floor anchor.
+    rest_frames: int = Field(default=60, ge=1)
+    bands: BandTolerances = Field(default_factory=BandTolerances)
+    clean_and_jerk: CleanAndJerkThresholds = Field(default_factory=CleanAndJerkThresholds)
+
+
 class PreprocessConfig(BaseModel):
     """Settings for one preprocess run.
 
@@ -67,6 +111,11 @@ class PreprocessConfig(BaseModel):
     # no depth), so setting it without `pose_root` is rejected. With `barbell_root` the hands
     # anchor the skeleton to the bar; without it, the grounded feet alone anchor it.
     kinematics_root: Path | None = None
+    # S9 Phase is optional too: unset skips it. It reads S8's published `joint_hva.json` (bone
+    # lengths, floor, knees), S5's bar and S6's grip, so it needs `kinematics_root` and
+    # `barbell_root`; setting it without them is rejected.
+    phase_root: Path | None = None
+    phase: PhaseThresholds = Field(default_factory=PhaseThresholds)
     # S5 Barbell's tree: `barbell.json` per capture under a root mirroring the raw layout --
     # written when S5 runs, read by S6 and S8 either way. When set, S6 corrects both wrists
     # against the bar the hands hold (`wrist_refine.py`): overhead the far wrist is occluded

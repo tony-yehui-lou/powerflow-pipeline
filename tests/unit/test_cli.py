@@ -280,6 +280,17 @@ def test_without_kinematics_flag_s8_is_skipped(
     assert config.kinematics_root is None
 
 
+def test_phase_flag_enables_s9(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _capture_flow_call(monkeypatch)
+    (tmp_path / "raw").mkdir()
+
+    result = runner.invoke(app, _preprocess_args(tmp_path, "--phase", str(tmp_path / "s9")))
+
+    assert result.exit_code == 0, result.output
+    config, _ = calls[0]
+    assert config.phase_root == tmp_path / "s9"
+
+
 def test_barbell_checkpoint_flags_reach_the_config_and_no_detector_is_built_here(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
