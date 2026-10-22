@@ -24,6 +24,15 @@ class RTMPoseVariant(StrEnum):
     PERFORMANCE = "performance"
 
 
+class BarbellDevice(StrEnum):
+    """Where S5 runs its detector; `auto` picks mps, then cuda, then cpu."""
+
+    AUTO = "auto"
+    MPS = "mps"
+    CUDA = "cuda"
+    CPU = "cpu"
+
+
 class RotationDirection(StrEnum):
     """The 90 degree rotation that repairs the capture app's landscape output."""
 
@@ -58,13 +67,28 @@ class PreprocessConfig(BaseModel):
     # no depth), so setting it without `pose_root` is rejected. With `barbell_root` the hands
     # anchor the skeleton to the bar; without it, the grounded feet alone anchor it.
     kinematics_root: Path | None = None
-    # S5's barbell detections, per capture under a root mirroring the raw layout. When set, S6
-    # corrects both wrists against the bar the hands hold (`wrist_refine.py`): overhead the far
-    # wrist is occluded and the detector's guess jumps hundreds of pixels. Unset leaves S6's
-    # wrists exactly as detected.
+    # S5 Barbell's tree: `barbell.json` per capture under a root mirroring the raw layout --
+    # written when S5 runs, read by S6 and S8 either way. When set, S6 corrects both wrists
+    # against the bar the hands hold (`wrist_refine.py`): overhead the far wrist is occluded
+    # and the detector's guess jumps hundreds of pixels. Unset leaves S6's wrists exactly as
+    # detected, and S8 anchored by the floor alone.
     barbell_root: Path | None = None
-    # Cap/collar detections below this score are not used to place the bar.
+    # A promoted S5 checkpoint (`barbell_model.read_card`). Set, S5 runs and publishes into
+    # `barbell_root`; unset, S5 doesn't run and `barbell_root` is read as already published.
+    barbell_checkpoint: Path | None = None
+    barbell_device: BarbellDevice = BarbellDevice.AUTO
+    # S5 records candidates down to this score, so a consumer never loses evidence it can't
+    # recover; false caps on a bystander scored 0.31-0.33 and are recorded too.
+    barbell_record_threshold: float = Field(default=0.3, ge=0.0, le=1.0)
+    # Consumers (S6, S8) ignore detections below this. Real ones score >= 0.95 almost everywhere.
     barbell_min_score: float = Field(default=0.5, ge=0.0, le=1.0)
+    barbell_batch_size: int = Field(default=4, ge=1)
+    # Also publish `overlay.mp4`, every frame with its boxes, for review. Re-encodes the video.
+    barbell_render_overlay: bool = False
+    # S5 warns, never rejects, when fewer frames than this carry a cap / a collar. 45kg1 has a
+    # cap on about a quarter of its frames and is still valid S5 output.
+    barbell_warn_cap_coverage: float = Field(default=0.5, ge=0.0, le=1.0)
+    barbell_warn_collar_coverage: float = Field(default=0.9, ge=0.0, le=1.0)
     # Reuse whatever S6 already published in `pose_root` instead of re-running detection.
     # `pose_root` names the S6 tree either way -- written when S6 runs, read when it doesn't --
     # so lifting an earlier run's detections is `skip_detect` plus a `lift_root`.

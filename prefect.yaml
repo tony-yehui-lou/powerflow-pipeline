@@ -12,7 +12,9 @@ deployments:
     description: >-
       S0 ingest, S1 cut to the lift window, S2 orientation repair, S3 retilt to
       level with the floor, and S4 crop to a stable common region — every stream
-      leaves portrait, rectified, and cropped.
+      leaves portrait, rectified, and cropped — then S5 detects the barbell's cap
+      and collar. The flow builds S5's detector from the promoted checkpoint itself,
+      so the deployment needs nothing but these parameters.
     work_pool:
       name: local
     parameters:
@@ -23,4 +25,6 @@ deployments:
         retilt_root: ../data/s3_retilt_output
         crop_root: ../data/s4_crop_output
         output_root: ../data/s2_orient_output
+        barbell_root: ../data/s5_barbell_output
+        barbell_checkpoint: ../data/models/s5_barbell/frcnn-v2-2026-10-19.pt
         rotation: cw

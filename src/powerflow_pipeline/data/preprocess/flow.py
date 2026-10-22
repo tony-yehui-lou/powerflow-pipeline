@@ -1,5 +1,5 @@
-"""The preprocess flow: S0 ingest, S1 cut, S2 orient, S3 retilt, S4 crop, S6 pose, S7 lift,
-S8 kinematics.
+"""The preprocess flow: S0 ingest, S1 cut, S2 orient, S3 retilt, S4 crop, S5 barbell, S6 pose,
+S7 lift, S8 kinematics.
 
 Ordered orchestration only.
 
@@ -22,6 +22,11 @@ from powerflow_pipeline.data.common.context import OutputMode, RunContext
 from powerflow_pipeline.data.common.errors import ScanRejected
 from powerflow_pipeline.data.common.manifest import RunManifest, emit_manifest
 from powerflow_pipeline.data.common.models import RejectedScan, ScanOutcome
+from powerflow_pipeline.data.preprocess.barbell_model import (
+    BarbellDetector,
+    build_barbell_detector,
+    read_card,
+)
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig
 from powerflow_pipeline.data.preprocess.models import (
     CameraRecord,
@@ -31,6 +36,7 @@ from powerflow_pipeline.data.preprocess.models import (
 )
 from powerflow_pipeline.data.preprocess.pose_model import Detector2D
 from powerflow_pipeline.data.preprocess.retilt import assess_plane_consistency
+from powerflow_pipeline.data.preprocess.tasks.barbell import detect_barbell_camera
 from powerflow_pipeline.data.preprocess.tasks.crop import crop_camera
 from powerflow_pipeline.data.preprocess.tasks.cut import cut_camera, resolve_cut_interval
 from powerflow_pipeline.data.preprocess.tasks.discover import discover_captures
@@ -53,11 +59,19 @@ MIN_CAPTURES_FOR_CONSISTENCY = 3
 
 
 @flow(name=PIPELINE)
-def preprocess(config: PreprocessConfig, detector: Detector2D | None = None) -> RunManifest:
+def preprocess(
+    config: PreprocessConfig,
+    detector: Detector2D | None = None,
+    barbell_detector: BarbellDetector | None = None,
+) -> RunManifest:
     """Ingest, cut to the shared lift window, and rotate to portrait. Or reject, with a reason.
 
-    S6 Pose runs after S4 Crop for every surviving camera, but only when `detector` is given,
-    so every existing caller that doesn't pass one gets exactly today's S0-S4 behaviour. S7
+    S5 Barbell runs right after S4 Crop when `config.barbell_checkpoint` is set (or a
+    `barbell_detector` is injected), before S6 so S6 and S8 read what it just published. The
+    flow builds S5's detector itself from config -- once, and never in a dry run -- so a Prefect
+    deployment, which can pass nothing but parameters, can run it.
+
+    S6 Pose runs after it for every surviving camera, but only when `detector` is given. S7
     Lift then runs only when `config.lift_root` is set, independently of S6: the two stages
     communicate through S6's published document, not in memory.
     """
@@ -70,6 +84,15 @@ def preprocess(config: PreprocessConfig, detector: Detector2D | None = None) -> 
         raise ValueError(
             "config.kinematics_root is set but config.pose_root is unset: no joints to solve"
         )
+    run_barbell = barbell_detector is not None or config.barbell_checkpoint is not None
+    if run_barbell and config.barbell_root is None:
+        raise ValueError(
+            "S5 Barbell would run but config.barbell_root is unset: nowhere to publish"
+        )
+    if barbell_detector is None and config.barbell_checkpoint is not None:
+        read_card(config.barbell_checkpoint)  # refuse an unreproducible checkpoint before any work
+        if not config.dry_run:
+            barbell_detector = build_barbell_detector(config)
 
     context = RunContext.create(
         pipeline=PIPELINE,
@@ -152,6 +175,13 @@ def preprocess(config: PreprocessConfig, detector: Detector2D | None = None) -> 
                     + retilt_step.file_ops
                     + crop_step.file_ops
                 )
+
+                if run_barbell:
+                    _, barbell_step = detect_barbell_camera(crop_record, config, barbell_detector)
+                    steps.append("barbell")
+                    derived = {**derived, **barbell_step.derived}
+                    warnings = warnings + barbell_step.warnings
+                    file_ops = file_ops + barbell_step.file_ops
 
                 if detector is not None:
                     _, pose_step = detect_pose_camera(crop_record, config, detector)

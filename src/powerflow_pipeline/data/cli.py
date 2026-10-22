@@ -8,6 +8,7 @@ from typing import Annotated
 import typer
 
 from powerflow_pipeline.data.preprocess.config import (
+    BarbellDevice,
     PoseDetector,
     PreprocessConfig,
     RotationDirection,
@@ -102,12 +103,33 @@ def preprocess(
         typer.Option(
             "--barbell",
             help=(
-                "S5's barbell detections (a root mirroring the raw layout, holding "
-                "predictions.json per capture). With --pose, S6 corrects both wrists against "
-                "the bar the hands hold; without it, wrists are left exactly as detected."
+                "S5's tree (a root mirroring the raw layout, holding barbell.json per "
+                "capture): written when --barbell-checkpoint runs S5, read either way. With "
+                "--pose, S6 corrects both wrists against the bar the hands hold; without it, "
+                "wrists are left exactly as detected."
             ),
         ),
     ] = None,
+    barbell_checkpoint: Annotated[
+        Path | None,
+        typer.Option(
+            "--barbell-checkpoint",
+            help=(
+                "A promoted S5 model (its .json card beside it). Runs S5 right after S4, "
+                "publishing into --barbell. Omit to read --barbell as already published."
+            ),
+        ),
+    ] = None,
+    barbell_device: Annotated[
+        BarbellDevice,
+        typer.Option("--barbell-device", help="Where S5 runs: auto picks mps, cuda, then cpu."),
+    ] = BarbellDevice.AUTO,
+    barbell_render_overlay: Annotated[
+        bool,
+        typer.Option(
+            "--barbell-overlay", help="Also publish S5's overlay.mp4 (boxes on every frame)."
+        ),
+    ] = False,
     skip_detect: Annotated[
         bool,
         typer.Option(
@@ -167,7 +189,8 @@ def preprocess(
 ) -> None:
     """Ingest a raw capture (S0), cut it to the lift window (S1), rotate it (S2),
     retilt it level with the floor (S3), crop it to a stable common region (S4), and,
-    when `--pose` is given, detect joints (S6); `--lift` lifts them with LiDAR depth (S7), and
+    when `--barbell-checkpoint` is given, detect the barbell's cap and collar (S5); when
+    `--pose` is given, detect joints (S6); `--lift` lifts them with LiDAR depth (S7), and
     `--kinematics` solves them in 3D from the lifter's body measurements instead (S8).
 
     Both raw layouts are handled by one invocation: the directory shape is detected per
@@ -189,6 +212,9 @@ def preprocess(
         lift_root=lift_root,
         kinematics_root=kinematics_root,
         barbell_root=barbell_root,
+        barbell_checkpoint=barbell_checkpoint,
+        barbell_device=barbell_device,
+        barbell_render_overlay=barbell_render_overlay,
         skip_detect=skip_detect,
         pose_detector=pose_detector,
         rtmpose_variant=rtmpose_variant,

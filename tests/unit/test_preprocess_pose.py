@@ -5,6 +5,7 @@ plumbing that connects S4's output to `pose_storage.py`'s stage-output layout (i
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -233,23 +234,47 @@ def _bar_scene(record: CameraRecord, n: int) -> dict[str, list[tuple[float, floa
     }
 
 
-def _write_predictions(
+def _write_detections(
     config: PreprocessConfig, record: CameraRecord, scene: dict[str, list[tuple[float, float]]]
 ) -> Path:
-    import json
+    """Publish S5's `barbell.json` for `record`: the scene's cap and collar on every frame."""
 
-    def box(p: tuple[float, float], score: float) -> dict[str, object]:
-        return {"box": [p[0] - 5, p[1] - 5, p[0] + 5, p[1] + 5], "score": score}
+    from powerflow_pipeline.data.common.barbell_storage import barbell_path, write_barbell
+    from powerflow_pipeline.data.common.models import (
+        BarbellDetection,
+        BarbellDocument,
+        BarbellProvenance,
+        Frames,
+        PixelSpace,
+    )
+
+    def box(p: tuple[float, float], score: float) -> BarbellDetection:
+        return BarbellDetection(box=(p[0] - 5, p[1] - 5, p[0] + 5, p[1] + 5), score=score)
 
     assert config.barbell_root is not None
-    path = config.barbell_root / record.relative / "predictions.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    frames = {
-        str(i): {"cap": box(scene["cap"][i], 0.99), "collar": box(scene["collar"][i], 0.95)}
-        for i in range(record.n_frames)
-    }
-    path.write_text(
-        json.dumps({"frame_size": [record.rgb_height, record.rgb_width], "predictions": frames})
+    n = record.n_frames
+    path = barbell_path(config.barbell_root, record.relative)
+    write_barbell(
+        path,
+        BarbellDocument(
+            capture_id=record.capture_id,
+            role=record.role,
+            stage="s4_crop",
+            pixel_space=PixelSpace(width=record.rgb_width, height=record.rgb_height),
+            frames=Frames(count=n, fps=record.fps, start_epoch_ms=0, t_ms=tuple(range(n))),
+            landmarks={
+                "cap": tuple(box(scene["cap"][i], 0.99) for i in range(n)),
+                "collar": tuple(box(scene["collar"][i], 0.95) for i in range(n)),
+            },
+            detector=BarbellProvenance(
+                architecture="fasterrcnn_resnet50_fpn_v2",
+                checkpoint="m.pt",
+                checkpoint_sha256="ab" * 32,
+                training_epoch=6,
+                record_threshold=0.3,
+                device="cpu",
+            ),
+        ),
     )
     return path
 
@@ -300,7 +325,7 @@ def test_wrists_without_a_declared_bar_are_not_guessed(
     tmp_path: Path, make_camera: MakeCamera, make_session_metadata: MakeSessionMetadata
 ) -> None:
     config, record = _wrist_session(tmp_path, make_camera, make_session_metadata)
-    _write_predictions(config, record, _bar_scene(record, record.n_frames))
+    _write_detections(config, record, _bar_scene(record, record.n_frames))
 
     _, step = detect_pose_camera.fn(record, config, _StubModel())
 
@@ -311,7 +336,7 @@ def test_wrists_with_too_few_frames_for_the_grip_warn(
     tmp_path: Path, make_camera: MakeCamera, make_session_metadata: MakeSessionMetadata
 ) -> None:
     config, record = _wrist_session(tmp_path, make_camera, make_session_metadata)
-    _write_predictions(config, record, _bar_scene(record, record.n_frames))
+    _write_detections(config, record, _bar_scene(record, record.n_frames))
     _declare_bar(record)
 
     _, step = detect_pose_camera.fn(record, config, _WristModel(_bar_scene(record, 99)))
@@ -333,7 +358,7 @@ def test_wrists_are_corrected_against_the_bar_and_recorded(
     monkeypatch.setattr(wrist_refine, "MIN_GRIP_FRAMES", 1)
     config, record = _wrist_session(tmp_path, make_camera, make_session_metadata)
     scene = _bar_scene(record, 99)
-    _write_predictions(config, record, scene)
+    _write_detections(config, record, scene)
     _declare_bar(record)
 
     _, step = detect_pose_camera.fn(record, config, _WristModel(scene))
@@ -347,5 +372,8 @@ def test_wrists_are_corrected_against_the_bar_and_recorded(
 
     sidecar = destination.parent / "wrist_refinement.json"
     assert sidecar.is_file()
+    recorded = json.loads(sidecar.read_text())
+    assert recorded["barbellDetections"].endswith("barbell.json")
+    assert recorded["barbellCheckpointSha256"] == "ab" * 32
     assert step.derived["wrist_far"] == "leftWrist"
     assert step.derived["wrist_far_corrected"] == record.n_frames

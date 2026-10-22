@@ -18,6 +18,7 @@ dependencies = [
     "mediapipe==0.10.35",
     "rtmlib>=0.0.16",
     "onnxruntime>=1.30.0",
+    "torchvision>=0.28",
 ]
 
 [dependency-groups]
@@ -41,7 +42,8 @@ packages = ["src/powerflow_pipeline"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--cov=powerflow_pipeline --cov-report=term-missing --cov-fail-under=90"
+addopts = "--cov=powerflow_pipeline --cov-report=term-missing --cov-fail-under=90 -m 'not slow'"
+markers = ["slow: runs a real model; skipped by default, run with -m slow"]
 
 [tool.coverage.run]
 source = ["src/powerflow_pipeline"]
@@ -60,5 +62,5 @@ files = ["src", "tests"]
 
 # Third-party packages that ship no type stubs.
 [[tool.mypy.overrides]]
-module = ["cv2.*", "av.*", "scipy.*", "pandas.*", "mediapipe.*", "rtmlib.*"]
+module = ["cv2.*", "av.*", "scipy.*", "pandas.*", "mediapipe.*", "rtmlib.*", "torchvision.*"]
 ignore_missing_imports = true

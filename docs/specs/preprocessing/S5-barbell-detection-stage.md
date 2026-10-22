@@ -553,3 +553,12 @@ TDD, as the repo requires; the coverage gate stays at 90%. None of these tests i
 - **The preprocess metadata task dropping `barbell_type`** (landmark spec §7). S5 doesn't need it,
   but S8 will.
 - **Concurrency across captures.** One model per run, captures sequential, as S6 runs today.
+
+---
+
+## Feedback (2026-10-22) → draft 2
+
+- **Not implemented.** S5 is still `scripts/predict_landmarks.py` only. Bundling it with the registry refactor stalled both.
+- **The ordering in §0 no longer holds.** S6 wrist correction and S8 Kinematics now read S5. They run inside the hand-wired loop, so a post-loop registry S5 would run after its own consumers.
+- **The deployment can't run model stages.** The flow takes its detector as an object built by `cli.py`, so `prefect.yaml` can't run S6, nor an S5 built the same way.
+- **Draft 2** hand-wires S5 between S4 and S6, has the flow build the detector from config, and defers the registry to its own spec. See [`S5-barbell-detection-stage-draft2.md`](S5-barbell-detection-stage-draft2.md).

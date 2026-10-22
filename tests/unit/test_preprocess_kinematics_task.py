@@ -25,7 +25,7 @@ from tests.unit.test_preprocess_pose import (
     _build_crop_record,
     _declare_bar,
     _make_pose_session,
-    _write_predictions,
+    _write_detections,
     make_config,
 )
 
@@ -137,7 +137,7 @@ def test_reads_the_bar_and_the_grip_when_s5_and_s6_published_them(
     pose = _publish_pose(config, record)
     _add_athlete(record)
     _declare_bar(record)
-    _write_predictions(config, record, _bar_scene(record, record.n_frames))
+    _write_detections(config, record, _bar_scene(record, record.n_frames))
     write_sidecar(
         pose.parent / "wrist_refinement.json",
         {"near": "rightWrist", "halfGripMm": 460.0, "farCorrected": list(range(record.n_frames))},
@@ -154,7 +154,7 @@ def test_an_undeclared_bar_is_not_guessed(
 ) -> None:
     config, record = capture
     _publish_pose(config, record)
-    _write_predictions(config, record, _bar_scene(record, record.n_frames))
+    _write_detections(config, record, _bar_scene(record, record.n_frames))
 
     _, step = solve_kinematics_camera.fn(record, config)
 

@@ -49,7 +49,7 @@ def _bar_track(
     if bar_type not in BAR_TYPES:
         return none, [f"barbell type {bar_type!r} is not one of {sorted(BAR_TYPES)}: no bar"]
     try:
-        caps, collars = barbell_input.read_detections(
+        detections = barbell_input.read_detections(
             path,
             n_frames=record.n_frames,
             frame_size=(record.rgb_width, record.rgb_height),
@@ -57,7 +57,8 @@ def _bar_track(
         )
     except ValueError as error:
         return none, [f"{error}: no bar"]
-    return solve_track(caps, collars, record.intrinsics, BAR_TYPES[bar_type]), []
+    bar = BAR_TYPES[bar_type]
+    return solve_track(detections.caps, detections.collars, record.intrinsics, bar), []
 
 
 def _grip(sidecar_path: Path) -> tuple[frozenset[int], float | None, Any]:

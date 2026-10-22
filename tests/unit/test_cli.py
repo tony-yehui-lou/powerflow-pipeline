@@ -9,6 +9,7 @@ import pytest
 from typer.testing import CliRunner
 
 from powerflow_pipeline.data.cli import app
+from powerflow_pipeline.data.preprocess.config import BarbellDevice
 
 runner = CliRunner()
 
@@ -263,3 +264,45 @@ def test_without_kinematics_flag_s8_is_skipped(
     assert result.exit_code == 0, result.output
     config, _ = calls[0]
     assert config.kinematics_root is None
+
+
+def test_barbell_checkpoint_flags_reach_the_config_and_no_detector_is_built_here(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _capture_flow_call(monkeypatch)
+    (tmp_path / "raw").mkdir()
+
+    result = runner.invoke(
+        app,
+        _preprocess_args(
+            tmp_path,
+            "--barbell",
+            str(tmp_path / "s5"),
+            "--barbell-checkpoint",
+            str(tmp_path / "m.pt"),
+            "--barbell-device",
+            "cpu",
+            "--barbell-overlay",
+        ),
+    )
+
+    assert result.exit_code == 0, result.output
+    config, _ = calls[0]
+    assert config.barbell_checkpoint == tmp_path / "m.pt"
+    assert config.barbell_device == BarbellDevice.CPU
+    assert config.barbell_render_overlay is True
+
+
+def test_without_barbell_checkpoint_s5_does_not_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _capture_flow_call(monkeypatch)
+    (tmp_path / "raw").mkdir()
+
+    result = runner.invoke(app, _preprocess_args(tmp_path, "--barbell", str(tmp_path / "s5")))
+
+    assert result.exit_code == 0, result.output
+    config, _ = calls[0]
+    assert config.barbell_checkpoint is None
+    assert config.barbell_device == BarbellDevice.AUTO
+    assert config.barbell_render_overlay is False

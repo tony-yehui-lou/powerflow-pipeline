@@ -234,7 +234,7 @@ real rectangle, write it into the **raw** `metadata.yaml`, then rerun just that 
 ## Run the pipeline
 
 There is no flag to stop early: every run does S0 Ingest → S1 Cut → S2 Orient → S3 Retilt →
-S4 Crop, and adding `--pose` appends S6 Pose on top. If S3 or S4 rejects a camera, its earlier
+S4 Crop. `--barbell-checkpoint` appends S5 Barbell, and `--pose` appends S6 Pose after it. If S3 or S4 rejects a camera, its earlier
 stage outputs (S2, S3) are already published and are not rolled back — only the rejected
 stage's output is missing.
 
@@ -286,9 +286,46 @@ The first run against a given detector/variant downloads its pretrained weights 
 `pose.json` per surviving camera plus a single `skeleton.human-v2.json` at the pose root's top
 level, describing the joint topology every `pose.json` under it shares.
 
+### Recipe B2 — S5 Barbell
+
+S5 runs the trained cap/collar detector over S4's RGB and publishes `barbell.json` per capture.
+It loads a checkpoint only through its card, so promote a training run once first (this copies
+the weights and writes `frcnn-v2-2026-10-19.json` beside them; a promoted model is never
+rewritten):
+
+```bash
+uv run python scripts/promote_barbell_model.py \
+  ../data/annotations/barbell/v3/runs/fasterrcnn_resnet50_fpn_v2-20261019-003709/best.pt \
+  ../data/models/s5_barbell/frcnn-v2-2026-10-19.pt
+```
+
+Then:
+
+```bash
+uv run powerflow preprocess \
+  --input   ../data/raw \
+  --records ../data/s0_ingest_output \
+  --cut     ../data/s1_cut_output \
+  --output  ../data/s2_orient_output \
+  --retilt  ../data/s3_retilt_output \
+  --crop    ../data/s4_crop_output \
+  --barbell ../data/s5_barbell_output \
+  --barbell-checkpoint ../data/models/s5_barbell/frcnn-v2-2026-10-19.pt \
+  --only    '10 September/*' \
+  --dry-run
+```
+
+Add `--pose` to the same run and S6 corrects wrists against the detections S5 just published.
+Expect about 0.43 s/frame on MPS (~3 minutes for a 433-frame capture); the manifest records
+the measured `barbell_s_per_frame`. A capture already published under `--barbell` is kept, not
+re-detected, unless `--overwrite`, so a rerun over a day only fills in what's missing. Add
+`--barbell-overlay` to also publish `overlay.mp4` with the boxes drawn, for review. Low
+coverage warns (`cap on 103/433 frames, below 50%`) and never rejects.
+
 ### Recipe C — S8 Kinematics on an earlier run's poses
 
-`--skip-detect` reuses the poses already under `--pose`; `--barbell` gives S8 the bar (and S6's
+`--skip-detect` reuses the poses already under `--pose`; `--barbell` without
+`--barbell-checkpoint` reuses S5's published detections and gives S8 the bar (and S6's
 `wrist_refinement.json` the grip), and the athlete measurements come from each capture's
 `metadata.yaml`:
 
@@ -301,7 +338,7 @@ uv run powerflow preprocess \
   --retilt     ../data/s3_retilt_output \
   --crop       ../data/s4_crop_output \
   --pose       ../data/s6_pose_output --skip-detect \
-  --barbell    ../data/annotations/barbell/v3 \
+  --barbell    ../data/s5_barbell_output \
   --kinematics ../data/s8_kinematics_output \
   --only       '10 September/*' \
   --dry-run
@@ -324,7 +361,10 @@ are each frame's solved value as is: nothing is smoothed, regularised or adjuste
 | `--crop` | Where S4 publishes the cropped streams. |
 | `--pose` | Where S6 publishes detected 2D poses. Omit to skip S6 entirely. |
 | `--kinematics` | Where S8 publishes `joint_hva.json`: every joint's 3D position, height and angle, solved from S6's 2D pose, the [athlete measurements](#athlete-measurements), the bar (`--barbell`) and the floor. Needs `--pose`; reads no depth. See `docs/specs/preprocessing/S8-joint-hva-draft3.md` and, for the angles, `S8-joint-angles-draft3.md`. |
-| `--barbell` | S5's barbell detections (`<path>/<capture path>/predictions.json`, e.g. `../data/annotations/barbell/v3`). With `--pose`, S6 corrects both wrists against the bar — see `docs/specs/preprocessing/S6-wrist-refinement.md`. Omit to leave wrists as detected. |
+| `--barbell` | S5's tree (`<path>/<capture path>/barbell.json`, e.g. `../data/s5_barbell_output`): written when `--barbell-checkpoint` runs S5, read either way. With `--pose`, S6 corrects both wrists against the bar — see `docs/specs/preprocessing/S6-wrist-refinement.md`. Omit to leave wrists as detected. |
+| `--barbell-checkpoint` | A promoted S5 model (`scripts/promote_barbell_model.py`). Runs S5 right after S4. Omit to read `--barbell` as already published. See `docs/specs/preprocessing/S5-barbell-detection-stage-draft3.md`. |
+| `--barbell-device` | `auto` (default: mps, then cuda, then cpu), `mps`, `cuda`, or `cpu`. |
+| `--barbell-overlay` | Also publish S5's `overlay.mp4`. |
 | `--pose-detector` | `mediapipe` (default) or `rtmpose`. |
 | `--rtmpose-variant` | `lightweight`, `balanced` (default), or `performance` — only with `--pose-detector rtmpose`. |
 | `--only` | Process only captures whose id matches this glob, e.g. `'22 August/Snch/*'`. Keep a two-camera session whole — see below. |
@@ -363,6 +403,7 @@ stage publishes to its own output root instead.
 | Portrait streams + provenance | `<--output>/<capture path>/` incl. `sidecar.json` | S2 |
 | Floor-levelled portrait streams + provenance | `<--retilt>/<capture path>/` incl. `retilt_sidecar.json` | S3 |
 | Cropped streams + provenance | `<--crop>/<capture path>/` | S4 |
+| Cap/collar detections + provenance | `<--barbell>/<capture path>/barbell.json`, `metadata.yaml`, and `overlay.mp4` with `--barbell-overlay` | S5 |
 | 2D pose document | `<--pose>/<capture path>/pose.json`, plus `<--pose>/skeleton.human-v2.json` once per run | S6 |
 | Wrist correction record | `<--pose>/<capture path>/wrist_refinement.json`, only with `--barbell` | S6 |
 | Joint 3D positions, heights and angles | `<--kinematics>/<capture path>/joint_hva.json` | S8 |

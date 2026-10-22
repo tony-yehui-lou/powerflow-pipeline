@@ -30,7 +30,6 @@ import random
 import sys
 import time
 from collections import defaultdict
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -38,81 +37,13 @@ PIPELINE_ROOT = Path(__file__).resolve().parents[1]
 COCO_ROOT = PIPELINE_ROOT.parent / "data" / "annotations" / "barbell" / "v3" / "coco"
 RUNS_ROOT = PIPELINE_ROOT.parent / "data" / "annotations" / "barbell" / "v3" / "runs"
 
-# background, cap, collar
-NUM_CLASSES = 3
-CLASS_NAMES = {1: "cap", 2: "collar"}
-
-
-@dataclass(frozen=True)
-class ModelSpec:
-    """How to build one architecture and repoint its classifier at our classes."""
-
-    factory: str  # torchvision.models.detection.<factory>
-    family: str  # fasterrcnn | retinanet | fcos
-    takes_size: bool = True
-
-
-MODELS: dict[str, ModelSpec] = {
-    "fasterrcnn_resnet50_fpn": ModelSpec("fasterrcnn_resnet50_fpn", "fasterrcnn"),
-    "fasterrcnn_resnet50_fpn_v2": ModelSpec("fasterrcnn_resnet50_fpn_v2", "fasterrcnn"),
-    "fasterrcnn_mobilenet_v3_large_fpn": ModelSpec(
-        "fasterrcnn_mobilenet_v3_large_fpn", "fasterrcnn"
-    ),
-    "fasterrcnn_mobilenet_v3_large_320_fpn": ModelSpec(
-        "fasterrcnn_mobilenet_v3_large_320_fpn", "fasterrcnn"
-    ),
-    "retinanet_resnet50_fpn": ModelSpec("retinanet_resnet50_fpn", "retinanet"),
-    "retinanet_resnet50_fpn_v2": ModelSpec("retinanet_resnet50_fpn_v2", "retinanet"),
-    "fcos_resnet50_fpn": ModelSpec("fcos_resnet50_fpn", "fcos"),
-}
-
-
-def build_model(name: str, min_size: int, max_size: int, weights: str | None = "DEFAULT") -> Any:
-    """COCO-pretrained detector with its classifier repointed at cap/collar.
-
-    `weights=None` skips the pretrained download -- useful for checking that a model in the
-    registry still builds, and for an ablation, but not for a real run on 200 images.
-    """
-
-    import torchvision
-    from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-    from torchvision.models.detection.fcos import FCOSClassificationHead
-    from torchvision.models.detection.retinanet import RetinaNetClassificationHead
-
-    if name not in MODELS:
-        raise SystemExit(f"unknown model {name!r}; try --list-models")
-    spec = MODELS[name]
-    factory = getattr(torchvision.models.detection, spec.factory)
-    kwargs: dict[str, Any] = {"weights": weights}
-    if spec.takes_size:
-        kwargs |= {"min_size": min_size, "max_size": max_size}
-    model = factory(**kwargs)
-
-    if spec.family == "fasterrcnn":
-        in_features = model.roi_heads.box_predictor.cls_score.in_features
-        model.roi_heads.box_predictor = FastRCNNPredictor(in_features, NUM_CLASSES)
-    elif spec.family == "retinanet":
-        head = model.head.classification_head
-        model.head.classification_head = RetinaNetClassificationHead(
-            in_channels=head.conv[0][0].in_channels
-            if hasattr(head.conv[0], "__getitem__")
-            else head.conv[0].in_channels,
-            num_anchors=model.anchor_generator.num_anchors_per_location()[0],
-            num_classes=NUM_CLASSES,
-            norm_layer=None,
-        )
-    elif spec.family == "fcos":
-        head = model.head.classification_head
-        model.head.classification_head = FCOSClassificationHead(
-            in_channels=head.conv[0][0].in_channels
-            if hasattr(head.conv[0], "__getitem__")
-            else head.conv[0].in_channels,
-            num_anchors=model.anchor_generator.num_anchors_per_location()[0],
-            num_classes=NUM_CLASSES,
-        )
-    else:  # pragma: no cover - the registry and this branch move together
-        raise SystemExit(f"no head-replacement rule for family {spec.family!r}")
-    return model
+# One builder for training and inference: S5 loads the weights this script saves through the
+# same registry, so the two can never construct different models.
+from powerflow_pipeline.data.preprocess.barbell_model import (  # noqa: E402
+    CLASS_NAMES,
+    MODELS,
+    build_model,
+)
 
 
 class LandmarkDataset:

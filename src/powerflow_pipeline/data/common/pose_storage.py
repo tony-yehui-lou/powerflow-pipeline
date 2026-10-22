@@ -67,7 +67,7 @@ def dumps(payload: Any, level: int = 0) -> str:
     return json.dumps(payload)
 
 
-def _write_once(path: Path, payload: Any) -> None:
+def write_once(path: Path, payload: Any) -> None:
     """Stage outputs are written once by one task and read many times by others."""
 
     if path.exists():
@@ -79,13 +79,13 @@ def _write_once(path: Path, payload: Any) -> None:
 def write_pose(path: Path, document: PoseDocument) -> None:
     """Write one camera's pose document for one capture."""
 
-    _write_once(path, document.to_document())
+    write_once(path, document.to_document())
 
 
 def write_sidecar(path: Path, payload: dict[str, Any]) -> None:
     """Write a small document beside a pose, under the same write-once rule."""
 
-    _write_once(path, payload)
+    write_once(path, payload)
 
 
 def read_pose(path: Path) -> PoseDocument:
@@ -98,5 +98,5 @@ def write_skeleton(directory: Path) -> Path:
     """Render the topology document from `HUMAN_SKELETON` and return where it landed."""
 
     path = skeleton_path(directory)
-    _write_once(path, skeleton_document())
+    write_once(path, skeleton_document())
     return path

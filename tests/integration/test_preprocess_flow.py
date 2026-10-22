@@ -15,8 +15,16 @@ from typer.testing import CliRunner
 
 from powerflow_pipeline.data.cli import app
 from powerflow_pipeline.data.common.manifest import artifact_key
-from powerflow_pipeline.data.common.models import HUMAN_SKELETON, JointId
+from powerflow_pipeline.data.common.models import (
+    HUMAN_SKELETON,
+    BarbellClass,
+    BarbellDetection,
+    BarbellProvenance,
+    JointId,
+)
 from powerflow_pipeline.data.common.pose_storage import pose_path, read_pose, skeleton_path
+from powerflow_pipeline.data.preprocess import flow as preprocess_module
+from powerflow_pipeline.data.preprocess.barbell_model import CheckpointCard, card_path, sha256_file
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig
 from powerflow_pipeline.data.preprocess.flow import preprocess
 from powerflow_pipeline.data.preprocess.pose_model import JointPixelSeries
@@ -428,6 +436,195 @@ def test_the_run_solves_kinematics_when_a_kinematics_root_is_given(
     assert config.kinematics_root is not None
     for scan in manifest.scans:
         assert (config.kinematics_root / scan.scan_id / "joint_hva.json").is_file()
+
+
+# --- S5 barbell: runs before S6, which reads what it published ---------------------------
+
+
+class _StubBarbellDetector:
+    """A cap and a collar on every frame -- stands in for a real `BarbellDetector`."""
+
+    provenance = BarbellProvenance(
+        architecture="fasterrcnn_resnet50_fpn_v2",
+        checkpoint="m.pt",
+        checkpoint_sha256="ef" * 32,
+        training_epoch=6,
+        record_threshold=0.3,
+        device="cpu",
+    )
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def detect(
+        self, rgb_path: Path, n_frames: int
+    ) -> dict[BarbellClass, list[BarbellDetection | None]]:
+        self.calls += 1
+        cap = BarbellDetection(box=(1.0, 1.0, 3.0, 3.0), score=0.99)
+        collar = BarbellDetection(box=(4.0, 4.0, 6.0, 7.0), score=0.95)
+        return {"cap": [cap] * n_frames, "collar": [collar] * n_frames}
+
+
+def _promoted_checkpoint(tmp_path: Path) -> Path:
+    """A checkpoint with a valid card. The weights are never loaded: the detector is stubbed."""
+
+    checkpoint = tmp_path / "models" / "s5_barbell" / "m.pt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"weights")
+    card = CheckpointCard(
+        architecture="fasterrcnn_resnet50_fpn_v2",
+        classes=("cap", "collar"),
+        training_epoch=6,
+        training_run="r",
+        source_checkpoint="r/best.pt",
+        sha256=sha256_file(checkpoint),
+    )
+    card_path(checkpoint).write_text(json.dumps(card.to_document()))
+    return checkpoint
+
+
+def test_the_run_publishes_barbell_detections_before_pose(
+    tmp_path: Path,
+    make_camera: MakeCamera,
+    make_meta_template: Any,
+    make_session_metadata: Any,
+) -> None:
+    raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
+    config = make_config(
+        tmp_path,
+        raw,
+        barbell_root=tmp_path / "s5_barbell_output",
+        pose_root=tmp_path / "s6_pose_output",
+    )
+
+    manifest = preprocess(config, detector=_StubDetector(), barbell_detector=_StubBarbellDetector())
+
+    assert manifest.scans
+    assert config.barbell_root is not None
+    for scan in manifest.scans:
+        assert scan.steps.index("barbell") == scan.steps.index("crop") + 1
+        assert scan.steps.index("pose") == scan.steps.index("barbell") + 1
+        assert scan.derived["barbell_frames_with_both"] > 0
+        assert (config.barbell_root / scan.scan_id / "barbell.json").is_file()
+        # S6 found this run's detections; it stops only at the undeclared bar type.
+        assert not any("no barbell detections" in w for w in scan.warnings)
+        assert any("barbell type" in w for w in scan.warnings)
+
+
+def test_the_flow_builds_the_detector_from_the_checkpoint(
+    tmp_path: Path,
+    make_camera: MakeCamera,
+    make_meta_template: Any,
+    make_session_metadata: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """What lets the Prefect deployment run S5: nothing but config crosses into the flow."""
+
+    raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
+    checkpoint = _promoted_checkpoint(tmp_path)
+    config = make_config(
+        tmp_path, raw, barbell_root=tmp_path / "s5_barbell_output", barbell_checkpoint=checkpoint
+    )
+    built: list[PreprocessConfig] = []
+    detector = _StubBarbellDetector()
+
+    def build(config: PreprocessConfig) -> _StubBarbellDetector:
+        built.append(config)
+        return detector
+
+    monkeypatch.setattr(preprocess_module, "build_barbell_detector", build)
+
+    manifest = preprocess(config)
+
+    assert len(built) == 1  # once per run, shared by every capture
+    assert detector.calls == len(manifest.scans) > 0
+    assert all("barbell" in scan.steps for scan in manifest.scans)
+
+
+def test_a_dry_run_plans_s5_without_loading_a_model(
+    tmp_path: Path,
+    make_camera: MakeCamera,
+    make_meta_template: Any,
+    make_session_metadata: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
+    config = make_config(
+        tmp_path,
+        raw,
+        barbell_root=tmp_path / "s5_barbell_output",
+        barbell_checkpoint=_promoted_checkpoint(tmp_path),
+        dry_run=True,
+    )
+
+    def refuse(config: PreprocessConfig) -> None:
+        raise AssertionError("a dry run must not load the model")
+
+    monkeypatch.setattr(preprocess_module, "build_barbell_detector", refuse)
+
+    manifest = preprocess(config)
+
+    assert manifest.scans
+    assert all("barbell" in scan.steps for scan in manifest.scans)
+    assert not (tmp_path / "s5_barbell_output").exists()
+
+
+def test_without_a_checkpoint_s5_does_not_run(
+    tmp_path: Path,
+    make_camera: MakeCamera,
+    make_meta_template: Any,
+    make_session_metadata: Any,
+) -> None:
+    raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
+    config = make_config(tmp_path, raw, barbell_root=tmp_path / "s5_barbell_output")
+
+    manifest = preprocess(config)
+
+    assert all("barbell" not in scan.steps for scan in manifest.scans)
+
+
+def test_preprocess_rejects_a_barbell_detector_without_a_barbell_root(
+    tmp_path: Path,
+    make_camera: MakeCamera,
+    make_meta_template: Any,
+    make_session_metadata: Any,
+) -> None:
+    raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
+    config = make_config(tmp_path, raw)
+
+    with pytest.raises(ValueError, match="barbell_root is unset"):
+        preprocess(config, barbell_detector=_StubBarbellDetector())
+
+
+def test_preprocess_rejects_a_checkpoint_without_a_barbell_root(
+    tmp_path: Path,
+    make_camera: MakeCamera,
+    make_meta_template: Any,
+    make_session_metadata: Any,
+) -> None:
+    raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
+    config = make_config(tmp_path, raw, barbell_checkpoint=_promoted_checkpoint(tmp_path))
+
+    with pytest.raises(ValueError, match="barbell_root is unset"):
+        preprocess(config)
+
+
+def test_preprocess_rejects_a_checkpoint_without_a_card_before_any_work(
+    tmp_path: Path,
+    make_camera: MakeCamera,
+    make_meta_template: Any,
+    make_session_metadata: Any,
+) -> None:
+    raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
+    checkpoint = tmp_path / "m.pt"
+    checkpoint.write_bytes(b"weights")
+    config = make_config(
+        tmp_path, raw, barbell_root=tmp_path / "s5_barbell_output", barbell_checkpoint=checkpoint
+    )
+
+    with pytest.raises(FileNotFoundError, match="has no card"):
+        preprocess(config)
+    assert not config.record_root.exists()
 
 
 # --- the single-camera layout, and a mixed raw root ---------------------------------------

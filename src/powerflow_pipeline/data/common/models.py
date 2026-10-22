@@ -395,3 +395,113 @@ def skeleton_document(
         "joints": list(skeleton.joints),
         "bones": [[bone.from_joint, bone.to_joint] for bone in skeleton.bones],
     }
+
+
+# S5 Barbell's published detections: one document per capture, `barbell.json`.
+# Normative source: docs/specs/preprocessing/S5-barbell-detection-stage-draft3.md §5.
+BARBELL_SCHEMA_VERSION: Final = "1.0.0"
+BarbellClass = Literal["cap", "collar"]
+BARBELL_CLASSES: Final[tuple[BarbellClass, ...]] = ("cap", "collar")
+Box = tuple[float, float, float, float]  # x0, y0, x1, y1
+
+
+class PixelSpace(BaseModel):
+    """The size of the image a document's pixels are drawn in."""
+
+    model_config = _DOCUMENT_CONFIG
+
+    width: int = Field(ge=1)
+    height: int = Field(ge=1)
+
+
+class BarbellDetection(BaseModel):
+    """One landmark's box on one frame, in the pixels of `BarbellDocument.stage`."""
+
+    model_config = _DOCUMENT_CONFIG
+
+    box: Box
+    score: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_box(self) -> BarbellDetection:
+        x0, y0, x1, y1 = self.box
+        if x1 <= x0 or y1 <= y0:
+            raise ValueError(f"box {self.box} must have a positive extent")
+        return self
+
+    @property
+    def centre(self) -> tuple[float, float]:
+        x0, y0, x1, y1 = self.box
+        return (x0 + x1) / 2.0, (y0 + y1) / 2.0
+
+
+class BarbellProvenance(BaseModel):
+    """Exactly which model produced a document, so it can be reproduced or distrusted."""
+
+    model_config = _DOCUMENT_CONFIG
+
+    architecture: str
+    checkpoint: str
+    checkpoint_sha256: str
+    training_epoch: int | None
+    # Detections below this were never recorded; consumers gate higher (`barbell_min_score`).
+    record_threshold: float = Field(ge=0.0, le=1.0)
+    rule: str = "highest-scoring detection per class"
+    device: str
+    mps_fallback: bool = False
+    versions: dict[str, str] = Field(default_factory=dict)
+
+
+class BarbellDocument(BaseModel):
+    """S5's cap and collar per frame of one capture: candidates, not a bar.
+
+    Every class array is `frames.count` long, with `None` where nothing scored above
+    `detector.record_threshold`. No geometry is done here; pairing, scale and height belong to
+    the consumers (`bar_geometry.solve_track`).
+    """
+
+    model_config = _DOCUMENT_CONFIG
+
+    schema_version: str = BARBELL_SCHEMA_VERSION
+    capture_id: str
+    role: CaptureRole
+    stage: PipelineStage  # whose image space every box is drawn in
+    pixel_space: PixelSpace
+    frames: Frames
+    classes: tuple[BarbellClass, ...] = BARBELL_CLASSES
+    landmarks: dict[BarbellClass, tuple[BarbellDetection | None, ...]]
+    detector: BarbellProvenance
+
+    @model_validator(mode="after")
+    def validate_landmarks(self) -> BarbellDocument:
+        if set(self.landmarks) != set(self.classes):
+            raise ValueError(
+                f"landmarks must hold exactly {list(self.classes)}, got {sorted(self.landmarks)}"
+            )
+        for name, series in self.landmarks.items():
+            if len(series) != self.frames.count:
+                raise ValueError(
+                    f"{name!r} holds {len(series)} frames, expected {self.frames.count}"
+                )
+        return self
+
+    def frames_with(self, name: BarbellClass) -> int:
+        return sum(1 for hit in self.landmarks[name] if hit is not None)
+
+    def frames_with_both(self) -> int:
+        return sum(
+            1
+            for cap, collar in zip(self.landmarks["cap"], self.landmarks["collar"], strict=True)
+            if cap is not None and collar is not None
+        )
+
+    def to_document(self) -> dict[str, Any]:
+        """The camelCase wire form written to `barbell.json`."""
+
+        return self.model_dump(by_alias=True, mode="json")
+
+    @classmethod
+    def from_document(cls, payload: dict[str, Any]) -> BarbellDocument:
+        """Rebuild from the wire form, validating every invariant on the way in."""
+
+        return cls.model_validate(payload)
