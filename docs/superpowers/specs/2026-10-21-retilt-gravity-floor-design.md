@@ -418,3 +418,35 @@ Acceptance:
 - **How much tilt error can downstream tolerate?** The refined plane's ~0.4° day spread is
   about 0.7 cm of height error per metre of lateral distance. That is probably fine, but no
   downstream spec states a requirement yet.
+
+---
+
+## Implementation notes (2026-10-21, branch `s3-retilt-gravity-floor`)
+
+Implemented as specified. The gravity fix (§1) ships on the same branch rather than as a
+separate change. Where the implementation departs from the text above, or learned something:
+
+- **Iterations never settle on real data.** On noisy real data the inlier set keeps flickering
+  at the 2 cm band edge, so every real capture used all 3 refits. Against 10 refits, 3 differ
+  by < 0.05° / 1 mm on 9 of 11 captures and by at most 0.28° / 9 mm on the other two. The
+  default of 3 is kept.
+- **Read-only re-run of the shipped functions over the 11 captures on disk** reproduces the
+  prototype table:
+  - exactly one peak per capture, holding 42–94% of points;
+  - RMS 0.53–0.87 cm;
+  - gravity agreement ≤ 3.3°;
+  - 10 September spread median 0.40° / max 0.66°, camera-height range 5.6 cm.
+
+  No pipeline run was made; the Verification section above is still the user's to run.
+- **Test fixtures.**
+  - `make_camera` now writes the odometry quaternion that matches a rendered floor
+    (`conftest.gravity_quaternion`, inverted by hand rather than through the code under test),
+    plus an optional `gravity_error_deg`.
+  - The retilt task tests render 64×48 depth instead of 16×12. At 16×12 only ~60 points
+    survive, which is too few for a 3°-biased seed to keep a peak, while 64×48 recovers tilt
+    and roll to 0.001° at up to 4° of bias.
+- **Fixtures no longer write floor regions.** Every test fixture's `floor_regions` argument was
+  removed, so the whole suite runs without an annotation. The one integration test that forced
+  an S3 rejection by stripping the region now forces it through `retilt_min_floor_points`.
+- **`scripts/fix_august_floor_regions.py`** is now obsolete: it writes keys S3 no longer reads.
+  It is left in place.

@@ -1,9 +1,16 @@
 """Pure maths for S3. No I/O, no Prefect, no side effects.
 
-Fits one floor plane per camera from pooled, back-projected depth points, derives the
-tilt/roll that levels that plane, and builds the homography (and per-pixel depth-scale
-map) that rectifies every stream. One plane, one rotation, one homography per camera --
-never per frame (docs/specs/preprocessing/4-retilt.md, Assumptions).
+Finds the floor without an operator annotation, fits one plane to it from pooled,
+back-projected depth points, derives the tilt/roll that levels that plane, and builds the
+homography (and per-pixel depth-scale map) that rectifies every stream. One plane, one
+rotation, one homography per camera -- never per frame (docs/specs/preprocessing/
+4-retilt.md, Assumptions).
+
+**Finding the floor** (docs/superpowers/specs/2026-10-21-retilt-gravity-floor-design.md):
+odometry gravity gives "up"; every confident depth point's height along it is histogrammed
+and the floor is the lowest peak holding a real share of the points (`height_peaks`). The
+plane is then refit to depth around that peak until its inliers settle (`refine_floor`), so
+gravity only chooses *which* points are floor -- depth still says *where* it is.
 
 **Correction to §4.** The spec's rectifying-rotation formula reads `R = R_x(tilt) @
 R_z(roll)`. Verified numerically against random floor normals (CLAUDE.md: "verify
@@ -17,106 +24,22 @@ verbatim -- only the final composition's sign is corrected.
 from __future__ import annotations
 
 import math
-from typing import Any, Literal
+from typing import Literal
 
 import cv2
 import numpy as np
 import torch
-from scipy import ndimage
 from scipy.spatial.transform import Rotation
 
 from powerflow_pipeline.data.common.errors import ScanRejected
 from powerflow_pipeline.data.common.models import CropBounds
 from powerflow_pipeline.data.preprocess.models import (
-    CaptureRole,
-    FloorRegion,
     Intrinsics,
     PlaneConsistency,
     PlaneFit,
 )
 
 ConfidenceMode = Literal["conf2_only", "conf1_and_2"]
-
-# 4-connectivity structuring element for the largest-conf-2-component search (§1).
-_FOUR_CONNECTED = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]])
-
-
-def parse_region_point(raw: str) -> tuple[float, float]:
-    """Parse a `"(x, y)"` on-disk region field into a float pair (4-retilt.md §1).
-
-    Real captures write these as parenthesised strings, not YAML sequences -- treating
-    the value as already-numeric rejects every real region.
-    """
-
-    text = raw.strip()
-    if not (text.startswith("(") and text.endswith(")")):
-        raise ValueError(f"not a parenthesised point: {raw!r}")
-    parts = text[1:-1].split(",")
-    if len(parts) != 2:
-        raise ValueError(f"not a parenthesised point: {raw!r}")
-    try:
-        return float(parts[0]), float(parts[1])
-    except ValueError as error:
-        raise ValueError(f"not a parenthesised point: {raw!r}") from error
-
-
-def region_prefixes(role: CaptureRole) -> tuple[str, ...]:
-    """The key prefixes to try, in order, for one role's floor-region fields (4-retilt.md §1).
-
-    A `single` capture writes the keys **unprefixed**: its metadata governs one camera, so
-    there is nothing to tell apart. The `side_` spelling is accepted as an alias, because
-    the lift window in the same file is already spelled `..._side_in_ms` and whichever the
-    operator types should work.
-
-    There is deliberately **no `front_` alias**. Real August files pair a `front_`-prefixed
-    bottom-left with an unprefixed top-right; that is an authoring mistake, not an alternate
-    spelling, and reading it would silently accept a half-corrected annotation.
-    """
-
-    if role == "front":
-        return ("front_",)
-    if role == "side":
-        return ("side_",)
-    return ("", "side_")
-
-
-def read_floor_region(metadata: dict[str, Any], role: CaptureRole) -> FloorRegion:
-    """Read this capture's operator-annotated floor region from the raw `metadata.yaml`.
-
-    Raises `ScanRejected` naming the exact missing/malformed field, never guesses. When a
-    role accepts several spellings, the rejection names the *primary* one.
-    """
-
-    video = metadata.get("video")
-    if not isinstance(video, dict):
-        raise ScanRejected(f"missing floor region for role {role}: no video block")
-
-    prefixes = region_prefixes(role)
-    for prefix in prefixes:
-        if f"{prefix}floor_region_bottom_left_in_pixels" in video:
-            break
-    else:
-        prefix = prefixes[0]
-
-    bl_field = f"{prefix}floor_region_bottom_left_in_pixels"
-    tr_field = f"{prefix}floor_region_top_right_in_pixels"
-
-    points: dict[str, tuple[float, float]] = {}
-    for field in (bl_field, tr_field):
-        raw = video.get(field)
-        if raw is None:
-            raise ScanRejected(f"missing floor region field: {field}")
-        try:
-            points[field] = parse_region_point(str(raw))
-        except ValueError as error:
-            raise ScanRejected(f"unparseable floor region field: {field}") from error
-
-    x0, y0 = points[bl_field]
-    x1, y1 = points[tr_field]
-    try:
-        return FloorRegion(x0=x0, y0=y0, x1=x1, y1=y1)
-    except ValueError as error:
-        raise ScanRejected(f"invalid floor region for role {role}: {error}") from error
 
 
 def depth_intrinsics(
@@ -142,46 +65,18 @@ def depth_intrinsics(
     )
 
 
-def select_floor_pixels(
-    depth: np.ndarray,
-    confidence: np.ndarray,
-    bounds: tuple[int, int, int, int],
-    conf2_area_fraction: float = 1 / 6,
-) -> tuple[np.ndarray, np.ndarray, ConfidenceMode]:
-    """Select floor pixels within `bounds` per §1; returns `(rows, cols, mode)`.
+def select_confident_pixels(
+    depth: np.ndarray, confidence: np.ndarray, *, min_confidence: Literal[1, 2]
+) -> tuple[np.ndarray, np.ndarray]:
+    """Every pixel of the frame at or above `min_confidence` with a depth return.
 
-    `bounds` is `(col_start, row_start, col_end, row_end)`, as `FloorRegion.pixel_bounds`
-    returns. The conf-1-and-2 fallback reads from the whole annotated region, not just
-    the largest conf-2 component -- that component is conf-2 by construction, so limiting
-    the fallback to it would make it vacuous.
+    Confidence `0` is never admitted, nor is a pixel with no depth (`0`). There is no
+    region: which of these pixels are floor is decided later, in height (`height_peaks`).
     """
 
-    col_start, row_start, col_end, row_end = bounds
-    region_confidence = confidence[row_start:row_end, col_start:col_end]
-    region_depth = depth[row_start:row_end, col_start:col_end]
-    area = region_confidence.shape[0] * region_confidence.shape[1]
-
-    conf2_mask = region_confidence == 2
-    labels, n_labels = ndimage.label(conf2_mask, structure=_FOUR_CONNECTED)
-
-    largest_size = 0
-    largest_label = 0
-    if n_labels:
-        sizes = ndimage.sum(conf2_mask, labels, index=range(1, n_labels + 1))
-        largest_label = int(np.argmax(sizes)) + 1
-        largest_size = int(sizes[largest_label - 1])
-
-    mode: ConfidenceMode
-    if largest_size >= conf2_area_fraction * area:
-        mask = labels == largest_label
-        mode = "conf2_only"
-    else:
-        mask = np.isin(region_confidence, (1, 2))
-        mode = "conf1_and_2"
-
-    mask &= region_depth > 0  # a pixel with no depth return is never selected (§2)
-    local_rows, local_cols = np.nonzero(mask)
-    return local_rows + row_start, local_cols + col_start, mode
+    mask = (confidence >= min_confidence) & (depth > 0)
+    rows, cols = np.nonzero(mask)
+    return rows, cols
 
 
 def backproject(
@@ -250,6 +145,89 @@ def fit_plane(
         confidence_mode=confidence_mode,
         floor_offset_m=floor_offset_m,
     )
+
+
+def height_peaks(
+    heights: np.ndarray, *, bin_m: float, min_fraction: float
+) -> list[tuple[float, float]]:
+    """Significant peaks of a height histogram as `(height_m, mass_fraction)`, lowest first.
+
+    A peak is a local maximum of the 3-bin-smoothed counts (strictly above its left
+    neighbour, so a plateau yields one peak) whose *raw* counts in the 2 bins either side
+    hold at least `min_fraction` of all points. The lowest one is the floor: nothing real
+    sits below it, and the threshold keeps sparse specular returns from counting.
+    """
+
+    heights = np.asarray(heights, dtype=np.float64)
+    if heights.size == 0:
+        return []
+
+    lo = math.floor(float(heights.min()) / bin_m) * bin_m
+    n_bins = math.floor((float(heights.max()) - lo) / bin_m) + 1
+    indices = np.minimum(((heights - lo) / bin_m).astype(np.int64), n_bins - 1)
+    counts = np.bincount(indices, minlength=n_bins).astype(np.float64)
+    smoothed = np.convolve(counts, np.ones(3) / 3.0, mode="same")
+
+    peaks: list[tuple[float, float]] = []
+    for k in range(n_bins):
+        left = smoothed[k - 1] if k > 0 else -math.inf
+        right = smoothed[k + 1] if k < n_bins - 1 else -math.inf
+        if not (smoothed[k] > left and smoothed[k] >= right):
+            continue
+        mass = float(counts[max(0, k - 2) : k + 3].sum()) / heights.size
+        if mass >= min_fraction:
+            peaks.append((lo + (k + 0.5) * bin_m, mass))
+    return peaks
+
+
+def refine_floor(
+    points: np.ndarray,
+    up: np.ndarray,
+    seed_height_m: float,
+    *,
+    seed_band_m: float,
+    inlier_band_m: float,
+    max_iterations: int,
+    n_frames_sampled: int = 0,
+    confidence_mode: ConfidenceMode = "conf2_only",
+) -> tuple[PlaneFit, int]:
+    """Fit the floor from depth, seeded at `seed_height_m` along gravity's `up`.
+
+    Takes the points within `seed_band_m` of the seed height, fits them with `fit_plane`,
+    then repeatedly re-selects every point of the cloud within `inlier_band_m` of that
+    plane and refits, stopping after `max_iterations` refits or once the inliers stop
+    changing. Gravity's few-degree bias smears the floor in height; each refit realigns the
+    plane to the floor's own orientation, so the bias never reaches the result.
+
+    Returns the final fit and the number of refits run.
+    """
+
+    points = np.asarray(points, dtype=np.float64)
+    heights = points @ np.asarray(up, dtype=np.float64)
+    inliers = np.abs(heights - seed_height_m) < seed_band_m
+    if inliers.sum() < 3:
+        raise ScanRejected(
+            f"no floor points within {seed_band_m} m of the seed height {seed_height_m:.3f} m"
+        )
+
+    plane = fit_plane(
+        points[inliers], n_frames_sampled=n_frames_sampled, confidence_mode=confidence_mode
+    )
+    iterations = 0
+    for _ in range(max_iterations):
+        distance = points @ np.array(plane.normal) + plane.floor_offset_m
+        updated = np.abs(distance) < inlier_band_m
+        iterations += 1
+        if updated.sum() < 3:
+            raise ScanRejected(f"the floor fit lost its inliers after {iterations} refits")
+        settled = bool(np.array_equal(updated, inliers))
+        inliers = updated
+        plane = fit_plane(
+            points[inliers], n_frames_sampled=n_frames_sampled, confidence_mode=confidence_mode
+        )
+        if settled:
+            break
+    return plane, iterations
 
 
 def _rotation_x(theta: float) -> np.ndarray:
@@ -337,16 +315,34 @@ _R_Z_90_CW = _rotation_z(math.radians(90.0))
 def gravity_down_camera(qx: float, qy: float, qz: float, qw: float) -> np.ndarray:
     """Odometry quaternion -> 'down' in S2's rotated portrait camera frame.
 
-    g_world -> ARKit camera axes (R_wc^T) -> CV camera axes (flip Y,Z) -> S2's 90 deg CW
-    rotation of the image (not the odometry columns). See 4-retilt.md Assumptions.
+    g_world -> camera axes (R_wc^T) -> S2's 90 deg CW rotation of the image (not the
+    odometry columns). The world frame is ARKit's, gravity-aligned with Y up, but the
+    exported pose's *camera* axes are already CV (X right, Y down, Z forward): an earlier
+    version applied ARKit's camera-axis flip, diag(1, -1, -1), on top, and disagreed with
+    fitted floors by 2-20 deg on every real capture, growing with tilt -- a mirrored tilt
+    axis. Without it, 39 real captures agree to a median 1.4 deg, max 4.0 deg
+    (2026-10-21-retilt-gravity-floor-design.md §1).
     """
 
-    r_wc = quat_to_matrix(qx, qy, qz, qw)  # world -> ARKit camera-local
+    r_wc = quat_to_matrix(qx, qy, qz, qw)  # camera -> world
     g_world = np.array([0.0, -1.0, 0.0])  # ARKit world is gravity-aligned, Y up
-    g_arkit = r_wc.T @ g_world
-    g_cv = np.diag([1.0, -1.0, -1.0]) @ g_arkit  # ARKit (Y up, Z back) -> CV (Y down, Z fwd)
+    g_cv = r_wc.T @ g_world
     g_portrait: np.ndarray = _R_Z_90_CW @ g_cv  # S2 rotates the image, not odometry
     return g_portrait
+
+
+def gravity_up_camera(quaternions: np.ndarray) -> np.ndarray:
+    """Unit "up" in S2's portrait camera frame, averaged over `(qx, qy, qz, qw)` rows.
+
+    The camera is static, so averaging only stops the result depending on which sampled
+    row came first; it does not shrink ARKit's fixed per-capture bias.
+    """
+
+    rows = np.asarray(quaternions, dtype=np.float64).reshape(-1, 4)
+    downs = np.array([gravity_down_camera(*(float(v) for v in row)) for row in rows])
+    mean = -downs.mean(axis=0)
+    up: np.ndarray = mean / np.linalg.norm(mean)
+    return up
 
 
 def gravity_agreement_deg(normal: np.ndarray, g_camera: np.ndarray) -> float:

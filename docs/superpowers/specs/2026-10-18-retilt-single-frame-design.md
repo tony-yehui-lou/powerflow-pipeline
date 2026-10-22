@@ -211,3 +211,10 @@ is not automatically the wrong answer.
 Finally, re-run 11 July without the flag and diff `retilt_sidecar.json` against the values
 recorded in `2026-08-26-retilt-implementation.md` Task 9: **unchanged**, confirming the default
 path was not touched.
+
+---
+
+**Superseded 2026-10-21** by `2026-10-21-retilt-gravity-floor-design.md`. Without a floor
+rectangle there is nothing for an occluder to contaminate: the lifter and bar are not
+horizontal planes at floor height, so they never enter the fit. Pooled sampling stays the only
+mode. This spec will not be implemented.

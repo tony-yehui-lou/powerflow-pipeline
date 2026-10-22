@@ -102,17 +102,27 @@ class PreprocessConfig(BaseModel):
     overwrite: bool = False
     dry_run: bool = False
 
-    # S3 Retilt tunables (docs/specs/preprocessing/4-retilt.md §3/§7).
+    # S3 Retilt tunables (docs/specs/preprocessing/4-retilt.md §3/§7,
+    # docs/superpowers/specs/2026-10-21-retilt-gravity-floor-design.md).
     retilt_sample_stride: int = Field(default=10, ge=1)
     retilt_max_sampled_frames: int = Field(default=32, ge=1)
     retilt_max_pooled_points: int = Field(default=200_000, ge=1)
     retilt_min_floor_points: int = Field(default=500, ge=1)
     retilt_max_plane_rms_m: float = Field(default=0.02, gt=0)
-    retilt_gravity_tolerance_deg: float = Field(default=5.0, gt=0)
+    # Rejects since the floor is no longer chosen by eye; 39 real captures over three days
+    # measured at most 4.0 deg once the gravity axis convention was corrected.
+    retilt_gravity_tolerance_deg: float = Field(default=6.0, gt=0)
     retilt_max_tilt_deg: float = Field(default=45.0, gt=0)
     retilt_max_roll_deg: float = Field(default=45.0, gt=0)
     retilt_max_translation_m: float = Field(default=0.05, gt=0)
-    retilt_conf2_area_fraction: float = Field(default=1 / 6, gt=0, le=1)
+    # Floor search: a height histogram along gravity, then a depth-refined plane. Real
+    # floors held 41-94% of confident points; one peak per capture on every day measured.
+    retilt_floor_bin_m: float = Field(default=0.01, gt=0)
+    retilt_floor_min_peak_fraction: float = Field(default=0.15, gt=0, le=1)
+    retilt_floor_seed_band_m: float = Field(default=0.03, gt=0)
+    retilt_floor_inlier_band_m: float = Field(default=0.02, gt=0)
+    retilt_floor_refine_iterations: int = Field(default=3, ge=1)
+    retilt_floor_ambiguity_m: float = Field(default=0.30, gt=0)
     # Day-level plane agreement, warn-only. Both defaults sit outside the spread measured
     # across 27 good captures of one static-rig day (1.6 deg, 0.07 m) and well inside the
     # failure that motivated the check (44 deg, 0.4 m). Proposals pending a second day.
