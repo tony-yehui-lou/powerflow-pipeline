@@ -64,7 +64,7 @@ def _make_crop_session(
         odometry_translation=odometry_translation,  # type: ignore[arg-type]
         **camera_overrides,
     )
-    make_session_metadata(raw, lift_start_ms=16, lift_end_ms=80, floor_regions="full_frame")
+    make_session_metadata(raw, lift_start_ms=16, lift_end_ms=80)
     return raw
 
 

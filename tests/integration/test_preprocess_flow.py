@@ -53,7 +53,6 @@ def build_capture(
         session="cnj_45kg_Set1",
         lift_start_ms=16,
         lift_end_ms=80,
-        floor_regions="full_frame",
     )
 
     # cnj_55kg_Set1: one camera is missing its IMU, the other its depth.
@@ -462,7 +461,6 @@ def build_single_camera_capture(
         camera=trial,
         lift_start_ms=16,
         lift_end_ms=80,
-        floor_regions="full_frame_single",
     )
     return raw
 
@@ -597,7 +595,6 @@ def test_a_capture_day_whose_planes_disagree_warns_without_rejecting(
             camera=trial,
             lift_start_ms=16,
             lift_end_ms=80,
-            floor_regions="full_frame_single",
         )
     # The odd capture's larger tilt costs a real fraction of a 96px-tall fixture frame that
     # it would not cost a 1920px one; raise the gate so S4 does not reject what S3's
@@ -639,14 +636,12 @@ def test_a_rejected_single_camera_capture_is_reported_once(
     """A single-camera group is its capture, so a group-level rollup would double-report it."""
 
     raw = build_single_camera_capture(tmp_path, make_camera, make_session_metadata)
-    # Strip the floor region: S3 rejects, and nothing publishes.
-    metadata = raw / "22 August" / "Snch" / "110kgSnch1" / "metadata.yaml"
-    metadata.write_text(metadata.read_text().split("video:")[0])
-    config = make_config(tmp_path, raw)
+    # Demand more floor than the fixture has: S3 rejects, and nothing publishes.
+    config = make_config(tmp_path, raw, retilt_min_floor_points=10_000_000)
 
     manifest = preprocess(config)
 
     assert manifest.scans == []
     (rejected,) = manifest.rejected_scans
     assert rejected.scan_id == "22 August/Snch/110kgSnch1"
-    assert "no video block" in rejected.reason
+    assert "retilt_min_floor_points" in rejected.reason

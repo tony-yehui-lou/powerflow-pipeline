@@ -64,7 +64,7 @@ def _make_pose_session(
         floor_roll_deg=-2.0,
         floor_distance_m=1.8,
     )
-    make_session_metadata(raw, lift_start_ms=16, lift_end_ms=80, floor_regions="full_frame")
+    make_session_metadata(raw, lift_start_ms=16, lift_end_ms=80)
     return raw
 
 

@@ -6,7 +6,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel
 
 from powerflow_pipeline.data.common.models import CropBounds
 
@@ -178,33 +178,6 @@ class SessionRecord(BaseModel):
     lift: LiftMeta
     athlete: AthleteMeta
     cameras: list[CameraRecord]
-
-
-class FloorRegion(BaseModel):
-    """A normalized floor-selection rectangle, operator-annotated per camera (4-retilt.md §1)."""
-
-    x0: float = Field(ge=0, le=1)
-    y0: float = Field(ge=0, le=1)  # bottom_left.y -- larger, since y grows downward
-    x1: float = Field(ge=0, le=1)
-    y1: float = Field(ge=0, le=1)  # top_right.y -- smaller
-
-    @model_validator(mode="after")
-    def validate_extent(self) -> FloorRegion:
-        if self.x0 >= self.x1:
-            raise ValueError("floor region degenerate on x: x0 >= x1")
-        if self.y1 >= self.y0:
-            raise ValueError("floor region degenerate on y: y1 >= y0")
-        return self
-
-    def pixel_bounds(self, width: int, height: int) -> tuple[int, int, int, int]:
-        """`(col_start, row_start, col_end, row_end)` per §1's conversion."""
-
-        return (
-            round(width * self.x0),
-            round(height * self.y1),
-            round(width * self.x1),
-            round(height * self.y0),
-        )
 
 
 class PlaneFit(BaseModel):

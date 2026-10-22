@@ -1,4 +1,4 @@
-"""Pure maths for S3 Retilt: region parsing, back-projection, plane fit, rectification.
+"""Pure maths for S3 Retilt: floor detection, back-projection, plane fit, rectification.
 
 No I/O, no Prefect, no fixtures beyond synthetic numpy arrays -- this module is checked
 numerically against known-good geometry, never merely "it ran" (CLAUDE.md).
@@ -20,11 +20,12 @@ from powerflow_pipeline.data.preprocess.retilt import (
     fit_plane,
     gravity_agreement_deg,
     gravity_down_camera,
+    gravity_up_camera,
+    height_peaks,
     homography,
-    parse_region_point,
-    read_floor_region,
     rectifying_rotation,
-    select_floor_pixels,
+    refine_floor,
+    select_confident_pixels,
     tilt_roll_from_normal,
     translation_span_m,
     valid_bounds,
@@ -57,132 +58,6 @@ def _synthetic_plane_points(
     return np.stack([x, y, z], axis=-1)
 
 
-# --- parse_region_point / read_floor_region --------------------------------------------
-
-
-def test_parse_region_point_real_capture_value() -> None:
-    assert parse_region_point("(0.40268, 0.64503)") == pytest.approx((0.40268, 0.64503))
-
-
-def test_parse_region_point_rejects_unparseable() -> None:
-    with pytest.raises(ValueError):
-        parse_region_point("0.4, 0.6")
-
-
-def test_read_floor_region_picks_the_role_prefix() -> None:
-    metadata = {
-        "video": {
-            "front_floor_region_bottom_left_in_pixels": "(0, 1)",
-            "front_floor_region_top_right_in_pixels": "(1, 0.75093)",
-            "side_floor_region_bottom_left_in_pixels": "(0, 1)",
-            "side_floor_region_top_right_in_pixels": "(0.40268, 0.64503)",
-        }
-    }
-    region = read_floor_region(metadata, "side")
-    assert (region.x0, region.y0, region.x1, region.y1) == pytest.approx(
-        (0.0, 1.0, 0.40268, 0.64503)
-    )
-
-
-def test_read_floor_region_rejects_missing_field() -> None:
-    with pytest.raises(ScanRejected):
-        read_floor_region({"video": {}}, "front")
-
-
-def test_read_floor_region_rejects_unparseable_field() -> None:
-    metadata = {
-        "video": {
-            "front_floor_region_bottom_left_in_pixels": "not-a-point",
-            "front_floor_region_top_right_in_pixels": "(1, 0.75093)",
-        }
-    }
-    with pytest.raises(ScanRejected):
-        read_floor_region(metadata, "front")
-
-
-def test_read_floor_region_rejects_degenerate_region() -> None:
-    metadata = {
-        "video": {
-            "front_floor_region_bottom_left_in_pixels": "(0.5, 0.2)",
-            "front_floor_region_top_right_in_pixels": "(0.5, 0.1)",
-        }
-    }
-    with pytest.raises(ScanRejected):
-        read_floor_region(metadata, "front")
-
-
-def test_read_floor_region_reads_unprefixed_keys_for_a_single_camera() -> None:
-    """One camera governed by its own metadata has nothing to tell apart, so no prefix."""
-
-    metadata = {
-        "video": {
-            "floor_region_bottom_left_in_pixels": "(0.20, 0.78)",
-            "floor_region_top_right_in_pixels": "(0.55, 0.68)",
-        }
-    }
-
-    region = read_floor_region(metadata, "single")
-
-    assert (region.x0, region.y0, region.x1, region.y1) == pytest.approx((0.20, 0.78, 0.55, 0.68))
-
-
-def test_read_floor_region_accepts_the_side_alias_for_a_single_camera() -> None:
-    """Its lift window is already spelled `..._side_in_ms`; either spelling should work."""
-
-    metadata = {
-        "video": {
-            "side_floor_region_bottom_left_in_pixels": "(0.20, 0.78)",
-            "side_floor_region_top_right_in_pixels": "(0.55, 0.68)",
-        }
-    }
-
-    region = read_floor_region(metadata, "single")
-
-    assert (region.x0, region.x1) == pytest.approx((0.20, 0.55))
-
-
-def test_read_floor_region_does_not_fall_back_to_a_front_prefix_for_a_single_camera() -> None:
-    """The real August files pair a `front_` bottom-left with an unprefixed top-right.
-
-    That is a half-corrected annotation, not an alternate spelling. Reading it would accept
-    a rectangle nobody finished checking; the rejection names the unprefixed field instead.
-    """
-
-    metadata = {
-        "video": {
-            "front_floor_region_bottom_left_in_pixels": "(0.65204, 0.66118)",
-            "floor_region_top_right_in_pixels": "(0.79080, 0.86117)",
-        }
-    }
-
-    with pytest.raises(ScanRejected, match="floor_region_bottom_left_in_pixels"):
-        read_floor_region(metadata, "single")
-
-
-def test_read_floor_region_rejects_an_inverted_y_region_rather_than_swapping() -> None:
-    """`y` runs top->bottom, so bottom-left's y must be the larger one.
-
-    Every real August region is written the other way round. Silently swapping would make
-    the pipeline accept an annotation whose author had the convention backwards, which is
-    exactly the state their rectangle turned out to be in.
-    """
-
-    metadata = {
-        "video": {
-            "floor_region_bottom_left_in_pixels": "(0.65204, 0.66118)",
-            "floor_region_top_right_in_pixels": "(0.79080, 0.86117)",
-        }
-    }
-
-    with pytest.raises(ScanRejected, match="degenerate on y"):
-        read_floor_region(metadata, "single")
-
-
-def test_read_floor_region_rejects_when_the_video_block_is_absent() -> None:
-    with pytest.raises(ScanRejected, match="no video block"):
-        read_floor_region({}, "single")
-
-
 # --- depth_intrinsics --------------------------------------------------------------------
 
 
@@ -196,65 +71,41 @@ def test_depth_intrinsics_pixel_centre_scaling() -> None:
     assert k_d.fy == pytest.approx(1343.0 * s)
 
 
-# --- select_floor_pixels ------------------------------------------------------------------
+# --- select_confident_pixels --------------------------------------------------------------
 
 
-def test_select_floor_pixels_conf2_dominant_uses_conf2_only() -> None:
+def test_select_confident_pixels_conf2_reads_the_whole_frame() -> None:
     depth = np.full((20, 20), 1500, dtype=np.uint16)
     confidence = np.zeros((20, 20), dtype=np.uint8)
-    confidence[2:18, 2:18] = 2  # a large connected conf-2 block: 16x16 = 256 of 400 pixels
-    bounds = (0, 0, 20, 20)
+    confidence[0:5, :] = 1
+    confidence[10:20, :] = 2
 
-    rows, cols, mode = select_floor_pixels(depth, confidence, bounds)
+    rows, cols = select_confident_pixels(depth, confidence, min_confidence=2)
 
-    assert mode == "conf2_only"
-    assert len(rows) == 256
+    assert len(rows) == 200
     assert set(confidence[rows, cols].tolist()) == {2}
 
 
-def test_select_floor_pixels_conf2_sparse_falls_back_to_conf1_and_2() -> None:
+def test_select_confident_pixels_conf1_admits_both_levels_never_zero() -> None:
     depth = np.full((20, 20), 1500, dtype=np.uint16)
     confidence = np.zeros((20, 20), dtype=np.uint8)
-    confidence[0:20, 0:10] = 1  # half the region is confidence-1
-    confidence[2:4, 2:4] = 2  # a tiny conf-2 patch: 4 of 400 pixels, well under 1/6
-    bounds = (0, 0, 20, 20)
+    confidence[0:5, :] = 1
+    confidence[10:20, :] = 2
 
-    rows, cols, mode = select_floor_pixels(depth, confidence, bounds)
+    rows, cols = select_confident_pixels(depth, confidence, min_confidence=1)
 
-    assert mode == "conf1_and_2"
-    assert set(confidence[rows, cols].tolist()) <= {1, 2}
-    assert 0 not in confidence[rows, cols].tolist()
+    assert len(rows) == 300
+    assert set(confidence[rows, cols].tolist()) == {1, 2}
 
 
-def test_select_floor_pixels_conf1_and_2_reads_the_whole_region_not_the_largest_component() -> None:
-    """§1: the conf-1-and-2 fallback reads from the annotated region, not the conf-2 component.
-
-    Conf-1 pixels sit outside the (tiny) largest conf-2 component but inside the region; they
-    must still be included once the conf2-only threshold is not met.
-    """
-
-    depth = np.full((20, 20), 1500, dtype=np.uint16)
-    confidence = np.zeros((20, 20), dtype=np.uint8)
-    confidence[0, 0] = 2  # a single-pixel conf-2 component: far under the 1/6 threshold
-    confidence[10:15, 10:15] = 1  # conf-1 pixels elsewhere in the region, outside that component
-    bounds = (0, 0, 20, 20)
-
-    rows, cols, mode = select_floor_pixels(depth, confidence, bounds)
-
-    assert mode == "conf1_and_2"
-    selected = set(zip(rows.tolist(), cols.tolist(), strict=True))
-    assert (0, 0) in selected
-    assert any(10 <= r < 15 and 10 <= c < 15 for r, c in selected)
-
-
-def test_select_floor_pixels_never_selects_zero_depth() -> None:
+def test_select_confident_pixels_never_selects_zero_depth() -> None:
     depth = np.full((20, 20), 1500, dtype=np.uint16)
     confidence = np.full((20, 20), 2, dtype=np.uint8)
     depth[5, 5] = 0
-    bounds = (0, 0, 20, 20)
 
-    rows, cols, _ = select_floor_pixels(depth, confidence, bounds)
+    rows, cols = select_confident_pixels(depth, confidence, min_confidence=2)
 
+    assert len(rows) == 399
     assert not any((r, c) == (5, 5) for r, c in zip(rows.tolist(), cols.tolist(), strict=True))
 
 
@@ -382,10 +233,59 @@ def test_valid_bounds_shrinks_under_a_roll() -> None:
 def test_gravity_down_camera_identity_quaternion() -> None:
     g = gravity_down_camera(0.0, 0.0, 0.0, 1.0)
 
-    # Hand-worked from the four-line chain at identity (R = I):
-    # g_world = (0,-1,0) -> g_arkit = (0,-1,0) -> g_cv = diag(1,-1,-1) @ g_arkit = (0,1,0)
-    # -> g_portrait = R_z(90 deg) @ (0,1,0) = (-1,0,0).
-    assert g == pytest.approx([-1.0, 0.0, 0.0], abs=1e-9)
+    # Hand-worked from the chain at identity (R = I): g_world = (0,-1,0) -> camera axes
+    # (already CV: X right, Y down, Z forward -- no ARKit flip) = (0,-1,0)
+    # -> g_portrait = R_z(90 deg) @ (0,-1,0) = (1,0,0).
+    assert g == pytest.approx([1.0, 0.0, 0.0], abs=1e-9)
+
+
+# Real first-frame odometry quaternions and the floor normals fitted on the same captures
+# from an operator-annotated rectangle (`../data/s2_orient_output`, `s3_retilt_output`,
+# 2026-10-20). Two independent sources of "up": with the ARKit->CV flip the old chain
+# applied, they disagreed by 10.5 and 15.1 deg; without it, by 1.1 and 1.5 deg.
+_REAL_GRAVITY_CASES = [
+    pytest.param(
+        (0.7096546, -0.702781, 0.034170967, 0.03635269),
+        (0.012776706015365609, -0.9966208191150993, -0.08113999439083903),
+        id="10 September/30kg2",
+    ),
+    pytest.param(
+        (0.694247, -0.7172322, 0.02781919, 0.0531521),
+        (-0.03762359449513068, -0.9895225608297499, -0.1393899807956081),
+        id="11 July/30kg_Set1/Front",
+    ),
+]
+
+
+@pytest.mark.parametrize(("quat", "fitted_normal"), _REAL_GRAVITY_CASES)
+def test_gravity_up_camera_agrees_with_real_fitted_floors(
+    quat: tuple[float, float, float, float], fitted_normal: tuple[float, float, float]
+) -> None:
+    up = gravity_up_camera(np.array([quat]))
+
+    angle = math.degrees(math.acos(float(np.clip(up @ np.array(fitted_normal), -1.0, 1.0))))
+    assert angle < 2.0
+
+
+def test_gravity_up_camera_is_unit_and_opposes_gravity() -> None:
+    quat = (0.7096546, -0.702781, 0.034170967, 0.03635269)
+
+    up = gravity_up_camera(np.array([quat]))
+
+    assert np.linalg.norm(up) == pytest.approx(1.0)
+    assert up == pytest.approx(-gravity_down_camera(*quat))
+
+
+def test_gravity_up_camera_averages_sampled_rows() -> None:
+    from scipy.spatial.transform import Rotation
+
+    base = Rotation.from_quat([0.7096546, -0.702781, 0.034170967, 0.03635269])
+    wobble = Rotation.from_euler("x", 1.0, degrees=True)
+    rows = np.array([(base * wobble).as_quat(), (base * wobble.inv()).as_quat()])
+
+    up = gravity_up_camera(rows)
+
+    assert up == pytest.approx(gravity_up_camera(np.array([base.as_quat()])), abs=1e-4)
 
 
 def test_gravity_agreement_deg_is_zero_when_normal_matches_gravity() -> None:
@@ -452,3 +352,170 @@ def test_rotation_matrices_are_self_consistent_across_random_normals() -> None:
         tilt, roll = tilt_roll_from_normal(n)
         r = rectifying_rotation(tilt, roll)
         assert r @ n == pytest.approx([0.0, -1.0, 0.0], abs=1e-6)
+
+
+# --- height_peaks -------------------------------------------------------------------------
+
+
+def _cluster(height: float, n: int, spread: float = 0.002, seed: int = 0) -> np.ndarray:
+    return np.random.default_rng(seed).uniform(height - spread, height + spread, n)
+
+
+def test_height_peaks_finds_a_single_floor() -> None:
+    heights = np.concatenate([_cluster(-1.40, 800), np.linspace(-1.3, 1.0, 200)])
+
+    peaks = height_peaks(heights, bin_m=0.01, min_fraction=0.15)
+
+    assert len(peaks) == 1
+    assert peaks[0][0] == pytest.approx(-1.40, abs=0.01)
+    assert peaks[0][1] >= 0.8
+
+
+def test_height_peaks_are_lowest_first_even_when_a_higher_one_is_larger() -> None:
+    """A table filling more of the frame than the floor is still not the floor."""
+
+    heights = np.concatenate([_cluster(-1.40, 300), _cluster(-0.70, 500, seed=1)])
+
+    peaks = height_peaks(heights, bin_m=0.01, min_fraction=0.15)
+
+    assert [h for h, _ in peaks] == pytest.approx([-1.40, -0.70], abs=0.01)
+    assert peaks[0][1] < peaks[1][1]
+
+
+def test_height_peaks_ignore_a_sparse_cluster_below_the_floor() -> None:
+    """Specular multipath off a shiny floor puts a few points below it; never 15%."""
+
+    heights = np.concatenate([_cluster(-1.60, 100), _cluster(-1.40, 900, seed=1)])
+
+    peaks = height_peaks(heights, bin_m=0.01, min_fraction=0.15)
+
+    assert len(peaks) == 1
+    assert peaks[0][0] == pytest.approx(-1.40, abs=0.01)
+
+
+def test_height_peaks_find_nothing_in_evenly_spread_heights() -> None:
+    """A wall seen square-on spreads over its whole height: no horizontal surface."""
+
+    heights = np.linspace(-1.5, 1.5, 3000)
+
+    assert height_peaks(heights, bin_m=0.01, min_fraction=0.15) == []
+
+
+def test_height_peaks_handle_a_perfectly_flat_cloud() -> None:
+    """Noise-free synthetic floors put every point in one bin."""
+
+    peaks = height_peaks(np.full(500, -1.5), bin_m=0.01, min_fraction=0.15)
+
+    assert len(peaks) == 1
+    assert peaks[0][0] == pytest.approx(-1.5, abs=0.01)
+    assert peaks[0][1] == pytest.approx(1.0)
+
+
+def test_height_peaks_reject_an_empty_cloud() -> None:
+    assert height_peaks(np.empty(0), bin_m=0.01, min_fraction=0.15) == []
+
+
+# --- refine_floor ---------------------------------------------------------------------------
+
+
+def _floor_cloud(normal: np.ndarray, offset_m: float, n: int, seed: int = 0) -> np.ndarray:
+    """Points on the plane `p . normal = -offset_m`, spread like a real floor in view."""
+
+    rng = np.random.default_rng(seed)
+    x = rng.uniform(-1.5, 1.5, n)
+    z = rng.uniform(0.8, 5.0, n)
+    # Solve normal . (x, y, z) = -offset for y.
+    y = (-offset_m - normal[0] * x - normal[2] * z) / normal[1]
+    return np.stack([x, y, z], axis=-1)
+
+
+def _tilt_about_x(v: np.ndarray, degrees: float) -> np.ndarray:
+    t = math.radians(degrees)
+    r = np.array([[1, 0, 0], [0, math.cos(t), -math.sin(t)], [0, math.sin(t), math.cos(t)]])
+    out: np.ndarray = r @ v
+    return out
+
+
+@pytest.mark.parametrize("gravity_error_deg", [0.0, 2.0, 4.0])
+def test_refine_floor_recovers_the_plane_from_a_biased_gravity_seed(
+    gravity_error_deg: float,
+) -> None:
+    """The property the design rests on: gravity only has to be roughly right."""
+
+    normal = _normal_from_tilt_roll(8.0, -2.0)
+    offset = 1.35
+    points = _floor_cloud(normal, offset, 20_000)
+    up = _tilt_about_x(normal, gravity_error_deg)
+    h0 = float(np.median(points @ up))
+
+    plane, iterations = refine_floor(
+        points, up, h0, seed_band_m=0.03, inlier_band_m=0.02, max_iterations=3
+    )
+
+    angle = math.degrees(math.acos(min(1.0, float(np.array(plane.normal) @ normal))))
+    assert angle < 0.01
+    assert plane.floor_offset_m == pytest.approx(offset, abs=1e-3)
+    assert plane.n_points == 20_000
+    assert 1 <= iterations <= 3
+
+
+def test_refine_floor_ignores_a_lifter_and_a_wall() -> None:
+    normal = _normal_from_tilt_roll(8.0, -2.0)
+    offset = 1.35
+    floor = _floor_cloud(normal, offset, 20_000)
+    rng = np.random.default_rng(3)
+    lifter = np.stack(  # a body-sized box standing on the floor, 3 m out
+        [rng.uniform(-0.3, 0.3, 4000), rng.uniform(-0.5, 1.3, 4000), rng.uniform(2.8, 3.2, 4000)],
+        axis=-1,
+    )
+    wall = np.stack(  # a back wall, square to the camera
+        [rng.uniform(-2, 2, 6000), rng.uniform(-2, 1.4, 6000), np.full(6000, 6.0)], axis=-1
+    )
+    points = np.concatenate([floor, lifter, wall])
+    up = _tilt_about_x(normal, 3.0)
+    peaks = height_peaks(points @ up, bin_m=0.01, min_fraction=0.15)
+
+    plane, _ = refine_floor(
+        points, up, peaks[0][0], seed_band_m=0.03, inlier_band_m=0.02, max_iterations=3
+    )
+
+    angle = math.degrees(math.acos(min(1.0, float(np.array(plane.normal) @ normal))))
+    assert angle < 0.1
+    assert plane.floor_offset_m == pytest.approx(offset, abs=0.005)
+
+
+def test_refine_floor_stops_early_once_the_inliers_settle() -> None:
+    normal = _normal_from_tilt_roll(0.0, 0.0)
+    points = _floor_cloud(normal, 1.5, 2000)
+
+    _, iterations = refine_floor(
+        points, normal, -1.5, seed_band_m=0.03, inlier_band_m=0.02, max_iterations=10
+    )
+
+    assert iterations < 10
+
+
+def test_refine_floor_rejects_a_seed_with_no_points_near_it() -> None:
+    normal = _normal_from_tilt_roll(0.0, 0.0)
+    points = _floor_cloud(normal, 1.5, 2000)
+
+    with pytest.raises(ScanRejected, match="floor"):
+        refine_floor(points, normal, 3.0, seed_band_m=0.03, inlier_band_m=0.02, max_iterations=3)
+
+
+def test_refine_floor_rejects_a_fit_that_keeps_none_of_its_points() -> None:
+    """A checkerboard of heights 2.5 cm either side of flat: inside the 3 cm seed band, but
+    the least-squares plane through it is flat and every point sits outside 2 cm of it."""
+
+    y = 0.025
+    points = np.array([[-1, y, 2], [1, -y, 2], [-1, -y, 4], [1, y, 4]], dtype=np.float64)
+
+    with pytest.raises(ScanRejected, match="lost its inliers"):
+        refine_floor(
+            points,
+            np.array([0.0, -1.0, 0.0]),
+            0.0,
+            seed_band_m=0.03,
+            inlier_band_m=0.02,
+            max_iterations=3,
+        )

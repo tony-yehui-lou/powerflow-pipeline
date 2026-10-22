@@ -82,9 +82,42 @@ class MakeCamera(Protocol):
         floor_tilt_deg: float = ...,
         floor_roll_deg: float = ...,
         floor_distance_m: float = ...,
+        gravity_error_deg: float = ...,
         odometry_translation: Callable[[int], tuple[float, float, float]] | None = ...,
         rgb_size: tuple[int, int] = ...,
     ) -> Path: ...
+
+
+def gravity_quaternion(up_portrait: np.ndarray) -> tuple[float, float, float, float]:
+    """An odometry `(qx, qy, qz, qw)` whose gravity, in S2's portrait camera frame, is `up`.
+
+    Inverts S3's chain by hand rather than through `retilt.gravity_up_camera`, so a fixture
+    built with it checks that function instead of agreeing with it by construction:
+    `up = -(R_z(90) @ R_wc^T @ (0, -1, 0))`, so `R_wc^T @ e_y = R_z(90)^T @ up`, and any
+    rotation taking that vector back onto `e_y` is a valid `R_wc`.
+    """
+
+    from scipy.spatial.transform import Rotation
+
+    r_z_90 = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+    up = np.asarray(up_portrait, dtype=np.float64)
+    v = r_z_90.T @ (up / np.linalg.norm(up))
+    r_wc, _ = Rotation.align_vectors([[0.0, 1.0, 0.0]], [v])
+    qx, qy, qz, qw = (float(value) for value in r_wc.as_quat())
+    return qx, qy, qz, qw
+
+
+def floor_up_portrait(
+    floor_tilt_deg: float, floor_roll_deg: float, gravity_error_deg: float = 0.0
+) -> np.ndarray:
+    """The baked-in floor's "up" in the portrait camera frame, optionally tipped about X
+    by `gravity_error_deg` -- the per-capture bias real ARKit gravity carries."""
+
+    up = rectifying_rotation(floor_tilt_deg, floor_roll_deg).T @ np.array([0.0, -1.0, 0.0])
+    t = np.radians(gravity_error_deg)
+    tip = np.array([[1.0, 0.0, 0.0], [0.0, np.cos(t), -np.sin(t)], [0.0, np.sin(t), np.cos(t)]])
+    tipped: np.ndarray = tip @ up
+    return tipped
 
 
 def _render_floor_plane(
@@ -112,9 +145,8 @@ def _render_floor_plane(
     "up" and the maths is well-conditioned, then permuted back through the inverse of
     S1's CW mapping. A pixel whose implied floor point is not in front of the camera
     (e.g. above the horizon a shallow tilt puts within frame) gets depth 0 / confidence
-    0 -- a real depth sensor reports no return there too, and this is exactly `select_
-    floor_pixels`'s definition of "not floor", so no separate narrow region is needed:
-    a `full_frame`-annotated region and this confidence mask cooperate correctly.
+    0 -- a real depth sensor reports no return there too, so S3's confident-pixel selection
+    skips it exactly as it would a real frame.
     """
 
     w_raw, h_raw = raw_depth_size
@@ -227,6 +259,7 @@ def make_camera() -> MakeCamera:
         floor_tilt_deg: float = 0.0,
         floor_roll_deg: float = 0.0,
         floor_distance_m: float = 1.5,
+        gravity_error_deg: float = 0.0,
         odometry_translation: Callable[[int], tuple[float, float, float]] | None = None,
         rgb_size: tuple[int, int] = RGB_SIZE,
     ) -> Path:
@@ -297,6 +330,13 @@ def make_camera() -> MakeCamera:
             body = STATIC_K if camera_matrix is None else camera_matrix
             (camera_dir / "camera_matrix.csv").write_text(body)
 
+        # A rendered floor gets the odometry attitude that agrees with it (S3 seeds its floor
+        # search from gravity); anything else keeps the identity pose.
+        quat = (
+            gravity_quaternion(floor_up_portrait(floor_tilt_deg, floor_roll_deg, gravity_error_deg))
+            if render_floor_plane
+            else (0.0, 0.0, 0.0, 1.0)
+        )
         if "odometry" not in omit:
             rows = [
                 "timestamp, frame, x, y, z, qx, qy, qz, qw, fx, fy, cx, cy,"
@@ -307,8 +347,8 @@ def make_camera() -> MakeCamera:
                 fy = ODOMETRY_FX[i % len(ODOMETRY_FX)] * scale_y
                 x, y, z = odometry_translation(i) if odometry_translation else (0.0, 0.0, 0.0)
                 rows.append(
-                    f"{uptime_base + i / odometry_hz:.6f}, {i:06d}, {x}, {y}, {z}, 0.0, 0.0, 0.0,"
-                    f" 1.0, {fx}, {fy}, {scaled_cx}, {scaled_cy}, , "
+                    f"{uptime_base + i / odometry_hz:.6f}, {i:06d}, {x}, {y}, {z}, {quat[0]},"
+                    f" {quat[1]}, {quat[2]}, {quat[3]}, {fx}, {fy}, {scaled_cx}, {scaled_cy}, , "
                 )
             (camera_dir / "odometry.csv").write_text("\n".join(rows) + "\n")
 

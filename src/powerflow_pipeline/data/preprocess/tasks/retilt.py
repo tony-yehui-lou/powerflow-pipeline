@@ -1,22 +1,23 @@
 """S3 · Floor-plane retilt → establishes I3.
 
-Fits one floor plane per camera from sampled, back-projected depth points (`retilt.py`),
-derives the rectifying tilt/roll, and rewarps RGB/depth/confidence with the resulting
-homography. Depth is the geometric source of truth; the odometry-derived gravity vector
-only checks the fit, warn-only, pending calibration against real sessions (see
-`retilt.py`'s module docstring and `docs/specs/preprocessing/4-retilt.md` §7).
+Finds the floor from odometry gravity and depth alone -- no operator annotation -- fits
+one plane to it from sampled, back-projected depth points (`retilt.py`), derives the
+rectifying tilt/roll, and rewarps RGB/depth/confidence with the resulting homography.
+Gravity chooses which points are floor and then rejects a plane that disagrees with it;
+depth is the geometric source of truth for where the floor is
+(`docs/superpowers/specs/2026-10-21-retilt-gravity-floor-design.md`).
 """
 
 from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import Literal
 
 import av
 import cv2
 import numpy as np
 import pandas as pd
-import yaml
 from prefect import task
 
 from powerflow_pipeline.data.common.errors import ScanRejected
@@ -29,19 +30,19 @@ from powerflow_pipeline.data.common.filesystem import (
 from powerflow_pipeline.data.common.models import FileOp, StepResult
 from powerflow_pipeline.data.common.task_logging import log_task_paths
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig
-from powerflow_pipeline.data.preprocess.models import CameraRecord
+from powerflow_pipeline.data.preprocess.models import CameraRecord, Intrinsics
 from powerflow_pipeline.data.preprocess.retilt import (
     ConfidenceMode,
     backproject,
     depth_intrinsics,
     depth_scale_map,
-    fit_plane,
     gravity_agreement_deg,
-    gravity_down_camera,
+    gravity_up_camera,
+    height_peaks,
     homography,
-    read_floor_region,
     rectifying_rotation,
-    select_floor_pixels,
+    refine_floor,
+    select_confident_pixels,
     tilt_roll_from_normal,
     translation_span_m,
     valid_bounds,
@@ -56,13 +57,6 @@ from powerflow_pipeline.data.preprocess.tasks.orient import OUTPUT_TIME_BASE
 PASSTHROUGH = ("imu.csv",)
 
 
-def _read_metadata(path: Path) -> dict[str, object]:
-    if not path.is_file():
-        raise ScanRejected(f"missing session metadata: {path}")
-    loaded = yaml.safe_load(path.read_text())
-    return loaded if isinstance(loaded, dict) else {}
-
-
 def _sample_indices(n_frames: int, config: PreprocessConfig) -> list[int]:
     indices = list(range(0, n_frames, config.retilt_sample_stride))[
         : config.retilt_max_sampled_frames
@@ -72,33 +66,43 @@ def _sample_indices(n_frames: int, config: PreprocessConfig) -> list[int]:
     return indices
 
 
-def _pool_floor_points(
+def _pool_confident_points(
     sample_indices: list[int],
     depth_paths: list[Path],
     confidence_paths: list[Path],
-    bounds: tuple[int, int, int, int],
-    k_d: object,
+    k_d: Intrinsics,
     config: PreprocessConfig,
-) -> tuple[np.ndarray, list[ConfidenceMode]]:
-    """Select and back-project floor pixels from every sampled frame, then pool them."""
+) -> tuple[np.ndarray, ConfidenceMode]:
+    """Back-project every confident pixel of every sampled frame, pooled (§2).
 
-    pooled: list[np.ndarray] = []
-    modes: list[ConfidenceMode] = []
-    for index in sample_indices:
-        depth_frame = read_frame(depth_paths[index])
-        confidence_frame = read_frame(confidence_paths[index])
-        rows, cols, mode = select_floor_pixels(
-            depth_frame, confidence_frame, bounds, config.retilt_conf2_area_fraction
-        )
-        modes.append(mode)
-        if rows.size:
-            pooled.append(backproject(rows, cols, depth_frame[rows, cols], k_d))  # type: ignore[arg-type]
+    Confidence `2` only, unless that leaves fewer than `retilt_min_floor_points`, in which
+    case confidence `1` is admitted too. Which points are floor is decided afterwards.
+    """
 
-    points = np.concatenate(pooled, axis=0) if pooled else np.empty((0, 3))
+    frames = [
+        (read_frame(depth_paths[index]), read_frame(confidence_paths[index]))
+        for index in sample_indices
+    ]
+
+    def pool(min_confidence: Literal[1, 2]) -> np.ndarray:
+        pooled = []
+        for depth_frame, confidence_frame in frames:
+            rows, cols = select_confident_pixels(
+                depth_frame, confidence_frame, min_confidence=min_confidence
+            )
+            pooled.append(backproject(rows, cols, depth_frame[rows, cols], k_d))
+        return np.concatenate(pooled, axis=0) if pooled else np.empty((0, 3))
+
+    mode: ConfidenceMode = "conf2_only"
+    points = pool(2)
+    if points.shape[0] < config.retilt_min_floor_points:
+        mode = "conf1_and_2"
+        points = pool(1)
+
     if points.shape[0] > config.retilt_max_pooled_points:
         stride = max(1, points.shape[0] // config.retilt_max_pooled_points)
         points = points[::stride][: config.retilt_max_pooled_points]
-    return points, modes
+    return points, mode
 
 
 def _remap_maps(h: np.ndarray, size: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
@@ -221,21 +225,15 @@ def _validate_exit(
 def retilt_camera(
     record: CameraRecord, config: PreprocessConfig
 ) -> tuple[CameraRecord, StepResult]:
-    """Fit one camera's floor plane, derive its rectifying rotation, and rewarp it whole.
+    """Find one camera's floor, derive its rectifying rotation, and rewarp it whole.
 
-    `record` is S2's *output* record (portrait dimensions, rotated `K`). The floor region
-    lives in the raw operator `metadata.yaml` (§1) rather than anywhere in S2's output
-    tree, and the record carries that file's resolved path -- both layouts keep it in a
-    different place, and only discovery is allowed to know where.
+    `record` is S2's *output* record (portrait dimensions, rotated `K`). Nothing is read
+    from the operator `metadata.yaml`: any `*_floor_region_*` keys left there are ignored.
     """
 
     source = record.source
     destination = config.retilt_root / record.relative
     log_task_paths(source, destination)
-
-    metadata = _read_metadata(record.metadata_path)
-    region = read_floor_region(metadata, record.role)
-    bounds = region.pixel_bounds(record.depth_width, record.depth_height)
 
     file_ops = [
         FileOp(op="write", src=source / "rgb.mp4", dst=destination / "rgb.mp4"),
@@ -250,11 +248,10 @@ def retilt_camera(
     retilt_record = record.model_copy(update={"source": destination})
 
     if config.dry_run:
-        # Unlike orient_camera, retilt's derived values need real pixel reads (the plane
-        # fit), not just the CameraRecord's dimensions -- and `source` may not exist yet
-        # if an upstream stage also dry-ran. Plan only what needs no pixel data: the
-        # floor-region validation above, and the file operations this step would perform.
-        return retilt_record, StepResult(derived={"region_px": list(bounds)}, file_ops=file_ops)
+        # Unlike orient_camera, every derived value retilt has needs real pixel reads (the
+        # floor search) -- and `source` may not exist yet if an upstream stage also
+        # dry-ran. Plan only the file operations this step would perform.
+        return retilt_record, StepResult(derived={}, file_ops=file_ops)
 
     odometry = pd.read_csv(source / "odometry.csv", skipinitialspace=True)
     sample_indices = _sample_indices(record.n_frames, config)
@@ -273,25 +270,69 @@ def retilt_camera(
 
     depth_paths = frame_paths(source / "depth")
     confidence_paths = frame_paths(source / "confidence")
-    points, per_frame_modes = _pool_floor_points(
-        sample_indices, depth_paths, confidence_paths, bounds, k_d, config
+    points, confidence_mode = _pool_confident_points(
+        sample_indices, depth_paths, confidence_paths, k_d, config
     )
     if points.shape[0] < config.retilt_min_floor_points:
         raise ScanRejected(
-            f"only {points.shape[0]} floor points selected, below "
+            f"only {points.shape[0]} confident depth points, below "
             f"retilt_min_floor_points={config.retilt_min_floor_points}"
         )
 
-    # §1: report "conf2_only" only if every sampled frame individually chose it -- the
-    # per-camera field would otherwise vacuously claim the majority's mode.
-    confidence_mode: ConfidenceMode = (
-        "conf2_only" if all(mode == "conf2_only" for mode in per_frame_modes) else "conf1_and_2"
+    up = gravity_up_camera(sampled[["qx", "qy", "qz", "qw"]].to_numpy(dtype=float))
+    peaks = height_peaks(
+        points @ up,
+        bin_m=config.retilt_floor_bin_m,
+        min_fraction=config.retilt_floor_min_peak_fraction,
     )
-    plane = fit_plane(points, n_frames_sampled=len(sample_indices), confidence_mode=confidence_mode)
+    if not peaks:
+        raise ScanRejected(
+            "no horizontal surface holds "
+            f">= {config.retilt_floor_min_peak_fraction:.0%} of confident depth points; "
+            "floor not visible"
+        )
+    seed_height_m = peaks[0][0]
+
+    plane, refine_iterations = refine_floor(
+        points,
+        up,
+        seed_height_m,
+        seed_band_m=config.retilt_floor_seed_band_m,
+        inlier_band_m=config.retilt_floor_inlier_band_m,
+        max_iterations=config.retilt_floor_refine_iterations,
+        n_frames_sampled=len(sample_indices),
+        confidence_mode=confidence_mode,
+    )
+    if plane.n_points < config.retilt_min_floor_points:
+        raise ScanRejected(
+            f"only {plane.n_points} floor points fitted, below "
+            f"retilt_min_floor_points={config.retilt_min_floor_points}"
+        )
     if plane.rms_residual_m > config.retilt_max_plane_rms_m:
         raise ScanRejected(
             f"plane fit RMS {plane.rms_residual_m:.4f} m exceeds "
             f"retilt_max_plane_rms_m={config.retilt_max_plane_rms_m}"
+        )
+
+    # Rejects, no longer warn-only: with nobody choosing the floor by eye, this is the one
+    # gate against a clean plane fitted to a sloped surface.
+    agreement = gravity_agreement_deg(np.array(plane.normal), -up)
+    if agreement > config.retilt_gravity_tolerance_deg:
+        raise ScanRejected(
+            f"gravity disagreement {agreement:.2f} deg exceeds "
+            f"retilt_gravity_tolerance_deg={config.retilt_gravity_tolerance_deg}"
+        )
+
+    warnings: list[str] = []
+    higher = [
+        height
+        for height, _ in peaks[1:]
+        if height - seed_height_m <= config.retilt_floor_ambiguity_m
+    ]
+    if higher:
+        warnings.append(
+            f"floor ambiguous: horizontal surfaces at {seed_height_m:.3f} m and "
+            f"{higher[0]:.3f} m along gravity; chose the lower"
         )
 
     tilt_deg, roll_deg = tilt_roll_from_normal(np.array(plane.normal))
@@ -310,21 +351,6 @@ def retilt_camera(
     bounds_valid = valid_bounds(h_rgb, rgb_size)
     scale_map = depth_scale_map(k_d, rotation, depth_size)
 
-    first = sampled.iloc[0]
-    g_camera = gravity_down_camera(
-        float(first["qx"]), float(first["qy"]), float(first["qz"]), float(first["qw"])
-    )
-    agreement = gravity_agreement_deg(np.array(plane.normal), g_camera)
-
-    warnings: list[str] = []
-    if agreement > config.retilt_gravity_tolerance_deg:
-        # Warn-only (§7): the axis-convention chain behind `g_camera` is unconfirmed
-        # against real captures, so this never rejects, only flags the disagreement.
-        warnings.append(
-            f"gravity disagreement {agreement:.2f} deg exceeds "
-            f"retilt_gravity_tolerance_deg={config.retilt_gravity_tolerance_deg}"
-        )
-
     sidecar = {
         "tilt_deg": tilt_deg,
         "roll_deg": roll_deg,
@@ -334,18 +360,21 @@ def retilt_camera(
         "n_floor_points": plane.n_points,
         "n_frames_sampled": plane.n_frames_sampled,
         "confidence_mode": confidence_mode,
-        "confidence_mode_per_frame": per_frame_modes,
         "homography_rgb": h_rgb.tolist(),
         "homography_depth": h_depth.tolist(),
         "gravity_agreement_deg": agreement,
-        "gravity_check_mode": "warn",
+        "gravity_check_mode": "reject",
         "valid_bounds_px": [bounds_valid.x0, bounds_valid.y0, bounds_valid.x1, bounds_valid.y1],
         "depth_values_recomputed": True,
         "k_rewritten": False,
-        "region_normalized": region.model_dump(),
-        "region_px": list(bounds),
         "sample_indices": sample_indices,
         "translation_span_m": span,
+        "floor_source": "gravity_seeded",
+        "gravity_up_cam": up.tolist(),
+        "floor_seed_height_m": seed_height_m,
+        "floor_peaks": [[height, mass] for height, mass in peaks],
+        "floor_inlier_fraction": plane.n_points / points.shape[0],
+        "floor_refine_iterations": refine_iterations,
     }
 
     result = StepResult(
@@ -354,6 +383,9 @@ def retilt_camera(
             "roll_deg": roll_deg,
             "gravity_agreement_deg": agreement,
             "plane_rms_residual_m": plane.rms_residual_m,
+            "floor_source": "gravity_seeded",
+            "floor_inlier_fraction": plane.n_points / points.shape[0],
+            "floor_peaks": [[height, mass] for height, mass in peaks],
             # The flow pools this across a capture day for the consistency check
             # (`assess_plane_consistency`), which cannot run until every capture is fitted.
             "floor_offset_m": plane.floor_offset_m,
