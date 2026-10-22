@@ -23,6 +23,7 @@ import pandas as pd
 import yaml
 from prefect import task
 
+from powerflow_pipeline.data.common.capture_models import CameraRecord, CutInterval, StreamCounts
 from powerflow_pipeline.data.common.errors import ScanRejected
 from powerflow_pipeline.data.common.filesystem import (
     cleanup,
@@ -30,11 +31,10 @@ from powerflow_pipeline.data.common.filesystem import (
     publish_staging,
     write_json,
 )
+from powerflow_pipeline.data.common.frames import frame_paths
 from powerflow_pipeline.data.common.models import FileOp, StepResult
 from powerflow_pipeline.data.common.task_logging import log_task_paths
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig
-from powerflow_pipeline.data.preprocess.models import CameraRecord, CutInterval, StreamCounts
-from powerflow_pipeline.data.preprocess.tasks.ingest import frame_paths
 from powerflow_pipeline.data.preprocess.tasks.orient import OUTPUT_TIME_BASE
 from powerflow_pipeline.data.preprocess.timeline import (
     creation_time_to_epoch_ms,

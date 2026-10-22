@@ -23,10 +23,10 @@ from pathlib import Path
 
 from prefect import task
 
+from powerflow_pipeline.data.common.capture_models import CaptureLayout, CaptureRole, CaptureUnit
 from powerflow_pipeline.data.common.filesystem import INTERNAL_PREFIX
 from powerflow_pipeline.data.common.models import RejectedScan
 from powerflow_pipeline.data.common.task_logging import log_task_paths
-from powerflow_pipeline.data.preprocess.models import CaptureLayout, CaptureRole, CaptureUnit
 from powerflow_pipeline.data.preprocess.tasks.ingest import REQUIRED_STREAMS
 
 OPERATOR_METADATA = "metadata.yaml"

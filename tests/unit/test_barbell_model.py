@@ -12,8 +12,8 @@ from pathlib import Path
 import pytest
 import torch
 
-from powerflow_pipeline.data.preprocess import barbell_model
-from powerflow_pipeline.data.preprocess.barbell_model import (
+from powerflow_pipeline.data.detect import barbell_model
+from powerflow_pipeline.data.detect.barbell_model import (
     MODELS,
     CheckpointCard,
     build_model,
@@ -24,7 +24,7 @@ from powerflow_pipeline.data.preprocess.barbell_model import (
     sha256_file,
     top1,
 )
-from powerflow_pipeline.data.preprocess.config import BarbellDevice
+from powerflow_pipeline.data.detect.config import BarbellDevice
 
 
 class TestRegistry:

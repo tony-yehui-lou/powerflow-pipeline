@@ -15,9 +15,9 @@ import cv2
 import numpy as np
 import pytest
 
+from powerflow_pipeline.data.common.capture_models import CameraRecord
 from powerflow_pipeline.data.common.errors import ScanRejected
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig
-from powerflow_pipeline.data.preprocess.models import CameraRecord
 from powerflow_pipeline.data.preprocess.tasks.cut import cut_camera, resolve_cut_interval
 from powerflow_pipeline.data.preprocess.tasks.ingest import ingest_camera
 from powerflow_pipeline.data.preprocess.tasks.orient import orient_camera

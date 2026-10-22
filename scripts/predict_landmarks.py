@@ -20,9 +20,9 @@ from pathlib import Path
 
 import av
 
-from powerflow_pipeline.data.preprocess.barbell_model import TorchvisionBarbellDetector
+from powerflow_pipeline.data.detect.barbell_model import TorchvisionBarbellDetector
+from powerflow_pipeline.data.detect.tasks.barbell import render_overlay
 from powerflow_pipeline.data.preprocess.config import BarbellDevice
-from powerflow_pipeline.data.preprocess.tasks.barbell import render_overlay
 
 DATA_ROOT = Path(__file__).resolve().parents[2] / "data"
 

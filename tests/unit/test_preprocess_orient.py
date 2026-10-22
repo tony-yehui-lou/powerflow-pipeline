@@ -12,9 +12,9 @@ import cv2
 import numpy as np
 import pytest
 
+from powerflow_pipeline.data.common.capture_models import CameraRecord
 from powerflow_pipeline.data.common.models import StepResult
 from powerflow_pipeline.data.preprocess.config import RotationDirection
-from powerflow_pipeline.data.preprocess.models import CameraRecord
 from powerflow_pipeline.data.preprocess.tasks.ingest import ingest_camera
 from powerflow_pipeline.data.preprocess.tasks.orient import orient_camera
 from tests.conftest import (

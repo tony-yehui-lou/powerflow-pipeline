@@ -234,3 +234,58 @@ captures and diff every published document. Every difference must be explained o
    or leave the epics as feature groupings independent of the pipeline split?
 5. **Naming:** `analyze` vs `analysis`, `detect` vs `detection`. This spec uses verbs, to
    match `preprocess`.
+
+---
+
+## Implementation notes (2026-10-23, branch `pipeline-phase-split`)
+
+Implemented as designed. Where the code differs from the text above:
+
+- **Module names.** `preprocess/models.py` became `common/capture_models.py`, because
+  `common/models.py` already exists. Three more pieces moved to `common/`, since both
+  phases use them:
+  - `barbell_input.py`: S5's reader, used by S6 and S8;
+  - `frames.py`: `frame_paths` and `read_frame`, out of the S0 ingest task; used by RTMPose
+    and S7;
+  - `WRIST_REFINEMENT_FILENAME`, now in `pose_storage.py`; read by S8 and S9.
+
+  `detect/` still imports two pure functions from `preprocess/retilt.py`: `backproject` and
+  `depth_intrinsics`. No pipeline imports another pipeline's tasks.
+- **Shared run options.** `common/run_options.py` holds `only`, `overwrite`, `dry_run` and
+  `selects()`. All three configs subclass it.
+- **Stage selection (§1.2, §1.3, §3).** `--only` was already the capture glob, so it keeps that
+  meaning.
+  - analyze selects stages with `--stages s8|s9` (repeatable). A stage runs when it is selected
+    and its output root is set.
+  - detect has no `--stages`. As before, S5 runs with a checkpoint, S6 with `--pose` unless
+    `--skip-detect`, and S7 with `--lift`.
+  - A run with nothing to do is refused.
+- **Missing upstream (§1.4).** Discovery walks S4's `crop_sidecar.json` files. A camera with S4
+  output whose `record.json` or `cut_sidecar.json` is missing is rejected with that reason. A
+  camera with no published S6 pose (or S8 tree, for S9) still gets a warning from the task, as
+  before the split, not a rejection. Turning that into a rejection would be a behaviour change
+  this split was meant not to make.
+- **Manifest location.**
+  - preprocess: `<records>/manifest.json`, unchanged;
+  - detect: `manifest.json` in the root of the last stage that ran (lift, else pose, else
+    barbell);
+  - analyze: in the phase root if S9 ran, else the kinematics root.
+
+  Prefect artifact keys are `<pipeline>-run-manifest`.
+- **`powerflow all`** takes `--data <root>` and uses the standard `sN_<stage>_output` folders
+  under it. It runs S6 but not S7, and runs S5 only with `--barbell-checkpoint`. It has no
+  `--dry-run`, because detect and analyze read what preprocess publishes.
+- **Prefect deployments.** The detect deployment runs S5 only. S6 needs a detector object,
+  which a deployment cannot pass.
+- **`method` fields are unchanged.** `joint_hva.json` still names `S8-joint-hva-draft3.md`,
+  and `phase.json` still names `S9-phase-intervals-draft7.md`. That keeps the outputs
+  byte-identical. Update them at the next schema bump.
+- **Not done here:** splitting `docs/specs/preprocessing/` by phase (§4).
+
+**Equivalence (Test plan, Verification).** The pre-split commit (`ae4ec2c`) and this branch
+were run on the same fixtures: the two-camera session and a single-camera capture. Each capture
+had `lift.type: snch`, a bar type and athlete measurements. Stub detectors were used, and every
+stage S0–S9 ran. All 267 output files except the run manifests are byte-identical: S0–S4
+streams and sidecars, `barbell.json`, `pose.json`, the S7 lift, `joint_hva.json` and
+`phase.json`. The differences are by design: preprocess's manifest now lists only S0–S4, and
+detect and analyze write their own. The run on 10 September real data has not been done yet.

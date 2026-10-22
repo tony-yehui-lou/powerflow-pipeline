@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from powerflow_pipeline.data.common.models import HUMAN_SKELETON
-from powerflow_pipeline.data.preprocess.halpe26_mapping import (
+from powerflow_pipeline.data.detect.halpe26_mapping import (
     HEAD,
     LEFT_ANKLE,
     LEFT_SHOULDER,

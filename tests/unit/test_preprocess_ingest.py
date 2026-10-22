@@ -9,9 +9,9 @@ from typing import Any
 import numpy as np
 import pytest
 
+from powerflow_pipeline.data.common.capture_models import CaptureUnit
 from powerflow_pipeline.data.common.errors import ScanRejected
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig
-from powerflow_pipeline.data.preprocess.models import CaptureUnit
 from powerflow_pipeline.data.preprocess.tasks.ingest import ingest_camera
 from tests.conftest import ODOMETRY_CX, ODOMETRY_CY, STATIC_FX, MakeCamera, sole_capture
 

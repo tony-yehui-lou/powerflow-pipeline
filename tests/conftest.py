@@ -13,10 +13,10 @@ import cv2
 import numpy as np
 import pytest
 
+from powerflow_pipeline.data.common.capture_models import CaptureLayout, CaptureUnit, Intrinsics
 from powerflow_pipeline.data.common.context import OutputMode, RunContext
 from powerflow_pipeline.data.preprocess.config import RotationDirection
 from powerflow_pipeline.data.preprocess.geometry import rotate_intrinsics, rotated_size
-from powerflow_pipeline.data.preprocess.models import CaptureLayout, CaptureUnit, Intrinsics
 from powerflow_pipeline.data.preprocess.retilt import depth_intrinsics, rectifying_rotation
 from powerflow_pipeline.data.preprocess.tasks.discover import (
     CAMERA_ROLES,

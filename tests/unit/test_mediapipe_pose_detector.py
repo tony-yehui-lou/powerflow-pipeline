@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 
 from powerflow_pipeline.data.common.models import HUMAN_SKELETON
-from powerflow_pipeline.data.preprocess.mediapipe_pose_detector import (
+from powerflow_pipeline.data.detect.mediapipe_pose_detector import (
     MediaPipePoseDetector,
     pad_to_square,
 )
@@ -100,7 +100,7 @@ class _StubLandmarker:
 
 
 def _patch_mediapipe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    module = "powerflow_pipeline.data.preprocess.mediapipe_pose_detector"
+    module = "powerflow_pipeline.data.detect.mediapipe_pose_detector"
     monkeypatch.setattr(f"{module}.vision.PoseLandmarkerOptions", _StubOptions)
     monkeypatch.setattr(f"{module}.vision.PoseLandmarker", _StubLandmarker)
     (tmp_path / "model.task").touch()

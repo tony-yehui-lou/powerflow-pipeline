@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from powerflow_pipeline.data.preprocess.models import CaptureLayout
+from powerflow_pipeline.data.common.capture_models import CaptureLayout
 from powerflow_pipeline.data.preprocess.tasks.discover import discover_captures
 from tests.conftest import MakeCamera
 

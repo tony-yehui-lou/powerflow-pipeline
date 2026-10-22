@@ -39,7 +39,7 @@ RUNS_ROOT = PIPELINE_ROOT.parent / "data" / "annotations" / "barbell" / "v3" / "
 
 # One builder for training and inference: S5 loads the weights this script saves through the
 # same registry, so the two can never construct different models.
-from powerflow_pipeline.data.preprocess.barbell_model import (  # noqa: E402
+from powerflow_pipeline.data.detect.barbell_model import (  # noqa: E402
     CLASS_NAMES,
     MODELS,
     build_model,

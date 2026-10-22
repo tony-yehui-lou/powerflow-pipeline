@@ -14,6 +14,8 @@ from powerflow_pipeline.data.common.models import SKELETON_ID, PoseDocument, ske
 
 POSE_OUTPUT_DIR: Final = "s6_pose_output"
 POSE_FILENAME: Final = "pose.json"
+# S6's wrist correction against the bar, beside `pose.json`; S8 and S9 read its grip.
+WRIST_REFINEMENT_FILENAME: Final = "wrist_refinement.json"
 
 
 def _session_relative(session_path: str | Path) -> Path:

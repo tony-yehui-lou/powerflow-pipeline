@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from powerflow_pipeline.data.preprocess import rtmpose_assets
+from powerflow_pipeline.data.detect import rtmpose_assets
 
 
 def _write_zip(path: Path, members: dict[str, bytes]) -> None:

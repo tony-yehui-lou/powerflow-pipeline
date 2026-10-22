@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 
 from powerflow_pipeline.data.common.models import HUMAN_SKELETON
-from powerflow_pipeline.data.preprocess.rtmpose_detector import (
+from powerflow_pipeline.data.detect.rtmpose_detector import (
     RTMPoseDetector,
     candidate_depth_m,
     select_subject,

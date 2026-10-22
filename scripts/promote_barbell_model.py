@@ -16,7 +16,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from powerflow_pipeline.data.preprocess.barbell_model import card_path, promote_checkpoint
+from powerflow_pipeline.data.detect.barbell_model import card_path, promote_checkpoint
 
 
 def main() -> int:

@@ -12,13 +12,13 @@ import cv2
 import pytest
 import yaml
 
-from powerflow_pipeline.data.common.errors import ScanRejected
-from powerflow_pipeline.data.preprocess.models import (
+from powerflow_pipeline.data.common.capture_models import (
     CameraRecord,
     CaptureLayout,
     CutInterval,
     Intrinsics,
 )
+from powerflow_pipeline.data.common.errors import ScanRejected
 from powerflow_pipeline.data.preprocess.tasks.cut import (
     cut_camera,
     read_lift_window,

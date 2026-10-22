@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from powerflow_pipeline.data.common.context import OutputMode
 from powerflow_pipeline.data.common.filesystem import write_json
-from powerflow_pipeline.data.common.models import RejectedScan, ScanOutcome
+from powerflow_pipeline.data.common.models import RejectedScan, ScanOutcome, StepResult
 from powerflow_pipeline.data.common.task_logging import log_task_paths
 
 
@@ -81,6 +81,24 @@ class RunManifest(BaseModel):
             lines.append("")
 
         return "\n".join(lines)
+
+
+def scan_outcome(
+    scan_id: str, source: Path, ran: list[tuple[str, StepResult]], *, dry_run: bool
+) -> ScanOutcome:
+    """One camera's manifest entry: every step it ran, in order, with what each reported."""
+
+    outcome = ScanOutcome(
+        scan_id=scan_id,
+        source=source,
+        status="planned" if dry_run else "published",
+        steps=[name for name, _ in ran],
+    )
+    for _, step in ran:
+        outcome.derived.update(step.derived)
+        outcome.warnings.extend(step.warnings)
+        outcome.file_ops.extend(step.file_ops)
+    return outcome
 
 
 @task

@@ -11,8 +11,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from powerflow_pipeline.data.common.capture_models import Intrinsics
 from powerflow_pipeline.data.preprocess.config import RotationDirection
-from powerflow_pipeline.data.preprocess.models import Intrinsics
 
 _CV2_ROTATION = {
     RotationDirection.CW: cv2.ROTATE_90_CLOCKWISE,

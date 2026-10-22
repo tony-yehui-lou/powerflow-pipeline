@@ -31,13 +31,13 @@ import numpy as np
 import torch
 from scipy.spatial.transform import Rotation
 
-from powerflow_pipeline.data.common.errors import ScanRejected
-from powerflow_pipeline.data.common.models import CropBounds
-from powerflow_pipeline.data.preprocess.models import (
+from powerflow_pipeline.data.common.capture_models import (
     Intrinsics,
     PlaneConsistency,
     PlaneFit,
 )
+from powerflow_pipeline.data.common.errors import ScanRejected
+from powerflow_pipeline.data.common.models import CropBounds
 
 ConfidenceMode = Literal["conf2_only", "conf1_and_2"]
 

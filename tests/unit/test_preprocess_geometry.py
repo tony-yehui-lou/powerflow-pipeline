@@ -5,13 +5,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from powerflow_pipeline.data.common.capture_models import Intrinsics
 from powerflow_pipeline.data.preprocess.config import RotationDirection
 from powerflow_pipeline.data.preprocess.geometry import (
     rotate_frame,
     rotate_intrinsics,
     rotated_size,
 )
-from powerflow_pipeline.data.preprocess.models import Intrinsics
 
 DEPTH_W, DEPTH_H = 256, 192
 MARKER_U, MARKER_V = 5, 3

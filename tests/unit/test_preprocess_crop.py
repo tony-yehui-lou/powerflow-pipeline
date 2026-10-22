@@ -7,14 +7,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from powerflow_pipeline.data.common.capture_models import CameraRecord
 from powerflow_pipeline.data.common.errors import ScanRejected
+from powerflow_pipeline.data.common.frames import read_frame
 from powerflow_pipeline.data.common.models import CropBounds
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig
 from powerflow_pipeline.data.preprocess.crop import depth_bounds
-from powerflow_pipeline.data.preprocess.models import CameraRecord
 from powerflow_pipeline.data.preprocess.tasks.crop import crop_camera
 from powerflow_pipeline.data.preprocess.tasks.cut import cut_camera, resolve_cut_interval
-from powerflow_pipeline.data.preprocess.tasks.ingest import ingest_camera, read_frame
+from powerflow_pipeline.data.preprocess.tasks.ingest import ingest_camera
 from powerflow_pipeline.data.preprocess.tasks.orient import orient_camera
 from powerflow_pipeline.data.preprocess.tasks.retilt import retilt_camera
 from tests.conftest import MakeCamera, MakeSessionMetadata, sole_capture

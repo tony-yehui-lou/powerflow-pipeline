@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from powerflow_pipeline.data.common.capture_models import PlaneFit, RetiltResult
 from powerflow_pipeline.data.common.models import CropBounds
-from powerflow_pipeline.data.preprocess.models import PlaneFit, RetiltResult
 
 
 def test_plane_fit_round_trips_through_json() -> None:

@@ -11,21 +11,21 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import av
-import cv2
 import numpy as np
 import pandas as pd
 from prefect import task
 
-from powerflow_pipeline.data.common.errors import ScanRejected
-from powerflow_pipeline.data.common.filesystem import write_json
-from powerflow_pipeline.data.common.task_logging import log_task_paths
-from powerflow_pipeline.data.preprocess.config import PreprocessConfig
-from powerflow_pipeline.data.preprocess.models import (
+from powerflow_pipeline.data.common.capture_models import (
     CameraRecord,
     CaptureUnit,
     Intrinsics,
     StreamCounts,
 )
+from powerflow_pipeline.data.common.errors import ScanRejected
+from powerflow_pipeline.data.common.filesystem import write_json
+from powerflow_pipeline.data.common.frames import frame_paths, read_frame
+from powerflow_pipeline.data.common.task_logging import log_task_paths
+from powerflow_pipeline.data.preprocess.config import PreprocessConfig
 
 CONFIDENCE_VALUES = {0, 1, 2}
 REQUIRED_STREAMS = (
@@ -82,12 +82,6 @@ def probe_rgb(path: Path) -> RgbProbe:
     )
 
 
-def frame_paths(directory: Path) -> list[Path]:
-    """Return the PNG frames of a stream in index order."""
-
-    return sorted(directory.glob("*.png"))
-
-
 def is_contiguous(paths: list[Path]) -> bool:
     """True when the filenames are the zero-padded range `000000 .. N-1`."""
 
@@ -140,15 +134,6 @@ def count_csv_rows(path: Path) -> int:
 
     with path.open() as handle:
         return max(sum(1 for _ in handle) - 1, 0)
-
-
-def read_frame(path: Path) -> np.ndarray:
-    """Read one stream frame exactly as stored: no depth conversion, no colour mapping."""
-
-    frame: np.ndarray | None = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
-    if frame is None:
-        raise ScanRejected(f"unreadable frame: {path.name}")
-    return frame
 
 
 def _check_streams_exist(source: Path) -> None:

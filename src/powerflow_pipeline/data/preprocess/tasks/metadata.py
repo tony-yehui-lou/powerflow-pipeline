@@ -21,15 +21,15 @@ from typing import Any
 import yaml
 from prefect import task
 
-from powerflow_pipeline.data.common.task_logging import log_task_paths
-from powerflow_pipeline.data.preprocess.config import PreprocessConfig
-from powerflow_pipeline.data.preprocess.models import (
+from powerflow_pipeline.data.common.capture_models import (
     AthleteMeta,
     CameraRecord,
     CaptureLayout,
     CutInterval,
     LiftMeta,
 )
+from powerflow_pipeline.data.common.task_logging import log_task_paths
+from powerflow_pipeline.data.preprocess.config import PreprocessConfig
 
 # The leaves of an uninstantiated template: type names and enum option lists.
 TYPE_NAMES = {

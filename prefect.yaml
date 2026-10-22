@@ -4,17 +4,15 @@
 name: powerflow-pipeline
 prefect-version: ">=3.7"
 
-# One entry per pipeline, added when a pipeline lands under
-# src/powerflow_pipeline/data/<pipeline>/flow.py.
+# One entry per pipeline under src/powerflow_pipeline/data/<pipeline>/flow.py. Each reads only
+# what the previous one published, so run them in this order.
 deployments:
   - name: preprocess
     entrypoint: src/powerflow_pipeline/data/preprocess/flow.py:preprocess
     description: >-
       S0 ingest, S1 cut to the lift window, S2 orientation repair, S3 retilt to
       level with the floor, and S4 crop to a stable common region — every stream
-      leaves portrait, rectified, and cropped — then S5 detects the barbell's cap
-      and collar. The flow builds S5's detector from the promoted checkpoint itself,
-      so the deployment needs nothing but these parameters.
+      leaves portrait, rectified, and cropped.
     work_pool:
       name: local
     parameters:
@@ -25,6 +23,41 @@ deployments:
         retilt_root: ../data/s3_retilt_output
         crop_root: ../data/s4_crop_output
         output_root: ../data/s2_orient_output
+        rotation: cw
+
+  - name: detect
+    entrypoint: src/powerflow_pipeline/data/detect/flow.py:detect
+    description: >-
+      S5 detects the barbell's cap and collar on S4's published output. The flow
+      builds S5's detector from the promoted checkpoint itself, so the deployment
+      needs nothing but these parameters. S6 Pose needs a detector object, which a
+      deployment cannot pass: run it from the CLI (`powerflow detect --pose`).
+    work_pool:
+      name: local
+    parameters:
+      config:
+        record_root: ../data/s0_ingest_output
+        cut_root: ../data/s1_cut_output
+        retilt_root: ../data/s3_retilt_output
+        crop_root: ../data/s4_crop_output
         barbell_root: ../data/s5_barbell_output
         barbell_checkpoint: ../data/models/s5_barbell/frcnn-v2-2026-10-19.pt
-        rotation: cw
+
+  - name: analyze
+    entrypoint: src/powerflow_pipeline/data/analyze/flow.py:analyze
+    description: >-
+      S8 solves every joint in 3D from S6's pose, the lifter's measurements, S5's
+      bar and the floor; S9 splits each rep into its lift's phases. Reads no video
+      and loads no detector.
+    work_pool:
+      name: local
+    parameters:
+      config:
+        record_root: ../data/s0_ingest_output
+        cut_root: ../data/s1_cut_output
+        retilt_root: ../data/s3_retilt_output
+        crop_root: ../data/s4_crop_output
+        pose_root: ../data/s6_pose_output
+        barbell_root: ../data/s5_barbell_output
+        kinematics_root: ../data/s8_kinematics_output
+        phase_root: ../data/s9_phase_output

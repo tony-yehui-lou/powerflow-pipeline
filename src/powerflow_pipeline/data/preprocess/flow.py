@@ -1,5 +1,4 @@
-"""The preprocess flow: S0 ingest, S1 cut, S2 orient, S3 retilt, S4 crop, S5 barbell, S6 pose,
-S7 lift, S8 kinematics, S9 phase.
+"""The preprocess flow: S0 ingest, S1 cut, S2 orient, S3 retilt, S4 crop.
 
 Ordered orchestration only.
 
@@ -9,6 +8,9 @@ each member against that shared interval. A group is whatever shares one lift wi
 a two-camera session, or a single-camera capture on its own -- and discovery decides which.
 A group without a usable owner, or whose cut interval is invalid, is rejected whole: the
 invariant is cross-camera, not per-camera.
+
+Preprocess ends at S4. The detect flow (S5-S7) and the analyze flow (S8-S9) run separately,
+on what this one publishes (docs/superpowers/specs/2026-10-22-pipeline-phase-split-design.md).
 """
 
 from __future__ import annotations
@@ -18,38 +20,24 @@ from pathlib import Path
 
 from prefect import flow
 
-from powerflow_pipeline.data.common.context import OutputMode, RunContext
-from powerflow_pipeline.data.common.errors import ScanRejected
-from powerflow_pipeline.data.common.manifest import RunManifest, emit_manifest
-from powerflow_pipeline.data.common.models import RejectedScan, ScanOutcome
-from powerflow_pipeline.data.preprocess.barbell_model import (
-    BarbellDetector,
-    build_barbell_detector,
-    read_card,
-)
-from powerflow_pipeline.data.preprocess.config import PreprocessConfig
-from powerflow_pipeline.data.preprocess.models import (
+from powerflow_pipeline.data.common.capture_models import (
     CameraRecord,
     CaptureLayout,
     CaptureUnit,
     CutInterval,
 )
-from powerflow_pipeline.data.preprocess.pose_model import Detector2D
+from powerflow_pipeline.data.common.context import OutputMode, RunContext
+from powerflow_pipeline.data.common.errors import ScanRejected
+from powerflow_pipeline.data.common.manifest import RunManifest, emit_manifest
+from powerflow_pipeline.data.common.models import RejectedScan, ScanOutcome
+from powerflow_pipeline.data.preprocess.config import PreprocessConfig
 from powerflow_pipeline.data.preprocess.retilt import assess_plane_consistency
-from powerflow_pipeline.data.preprocess.tasks.barbell import detect_barbell_camera
 from powerflow_pipeline.data.preprocess.tasks.crop import crop_camera
 from powerflow_pipeline.data.preprocess.tasks.cut import cut_camera, resolve_cut_interval
 from powerflow_pipeline.data.preprocess.tasks.discover import discover_captures
 from powerflow_pipeline.data.preprocess.tasks.ingest import ingest_camera
-from powerflow_pipeline.data.preprocess.tasks.kinematics import solve_kinematics_camera
-from powerflow_pipeline.data.preprocess.tasks.lift import lift_pose_camera
 from powerflow_pipeline.data.preprocess.tasks.metadata import write_group_metadata
 from powerflow_pipeline.data.preprocess.tasks.orient import orient_camera
-from powerflow_pipeline.data.preprocess.tasks.phase import detect_phases_camera
-from powerflow_pipeline.data.preprocess.tasks.pose import (
-    detect_pose_camera,
-    ensure_skeleton_published,
-)
 from powerflow_pipeline.data.preprocess.tasks.retilt import retilt_camera
 
 PIPELINE = "preprocess"
@@ -60,48 +48,8 @@ MIN_CAPTURES_FOR_CONSISTENCY = 3
 
 
 @flow(name=PIPELINE)
-def preprocess(
-    config: PreprocessConfig,
-    detector: Detector2D | None = None,
-    barbell_detector: BarbellDetector | None = None,
-) -> RunManifest:
-    """Ingest, cut to the shared lift window, and rotate to portrait. Or reject, with a reason.
-
-    S5 Barbell runs right after S4 Crop when `config.barbell_checkpoint` is set (or a
-    `barbell_detector` is injected), before S6 so S6 and S8 read what it just published. The
-    flow builds S5's detector itself from config -- once, and never in a dry run -- so a Prefect
-    deployment, which can pass nothing but parameters, can run it.
-
-    S6 Pose runs after it for every surviving camera, but only when `detector` is given. S7
-    Lift then runs only when `config.lift_root` is set, independently of S6: the two stages
-    communicate through S6's published document, not in memory.
-    """
-
-    if detector is not None and config.pose_root is None:
-        raise ValueError("detector was given but config.pose_root is unset")
-    if config.lift_root is not None and config.pose_root is None:
-        raise ValueError("config.lift_root is set but config.pose_root is unset: nothing to lift")
-    if config.kinematics_root is not None and config.pose_root is None:
-        raise ValueError(
-            "config.kinematics_root is set but config.pose_root is unset: no joints to solve"
-        )
-    if config.phase_root is not None and config.kinematics_root is None:
-        raise ValueError(
-            "config.phase_root is set but config.kinematics_root is unset: no kinematics to read"
-        )
-    if config.phase_root is not None and config.barbell_root is None:
-        raise ValueError(
-            "config.phase_root is set but config.barbell_root is unset: no bar to segment"
-        )
-    run_barbell = barbell_detector is not None or config.barbell_checkpoint is not None
-    if run_barbell and config.barbell_root is None:
-        raise ValueError(
-            "S5 Barbell would run but config.barbell_root is unset: nowhere to publish"
-        )
-    if barbell_detector is None and config.barbell_checkpoint is not None:
-        read_card(config.barbell_checkpoint)  # refuse an unreproducible checkpoint before any work
-        if not config.dry_run:
-            barbell_detector = build_barbell_detector(config)
+def preprocess(config: PreprocessConfig) -> RunManifest:
+    """Ingest, cut to the shared lift window, rotate, level and crop. Or reject, with a reason."""
 
     context = RunContext.create(
         pipeline=PIPELINE,
@@ -117,15 +65,6 @@ def preprocess(
         output_mode=context.output_mode,
         dry_run=context.dry_run,
     )
-
-    if not config.dry_run:
-        # Each pose tree is self-describing: joint names mean nothing without the topology
-        # they were captured against, so every root that holds a pose document gets one.
-        if detector is not None:
-            assert config.pose_root is not None  # checked above
-            ensure_skeleton_published(config.pose_root, overwrite=config.overwrite)
-        if config.lift_root is not None:
-            ensure_skeleton_published(config.lift_root, overwrite=config.overwrite)
 
     discovery = discover_captures(config.raw_root)
     manifest.rejected_scans.extend(discovery.rejected)
@@ -163,7 +102,7 @@ def preprocess(
                 # A camera rejected here has already published S2 output -- the same
                 # shape as a camera rejected at S2 having already published S1 output.
                 retilt_record, retilt_step = retilt_camera(orient_record, config)
-                crop_record, crop_step = crop_camera(retilt_record, config)
+                _, crop_step = crop_camera(retilt_record, config)
 
                 steps = ["ingest", "cut", "orient", "retilt", "crop"]
                 derived = {
@@ -184,41 +123,6 @@ def preprocess(
                     + retilt_step.file_ops
                     + crop_step.file_ops
                 )
-
-                if run_barbell:
-                    _, barbell_step = detect_barbell_camera(crop_record, config, barbell_detector)
-                    steps.append("barbell")
-                    derived = {**derived, **barbell_step.derived}
-                    warnings = warnings + barbell_step.warnings
-                    file_ops = file_ops + barbell_step.file_ops
-
-                if detector is not None:
-                    _, pose_step = detect_pose_camera(crop_record, config, detector)
-                    steps.append("pose")
-                    derived = {**derived, **pose_step.derived}
-                    warnings = warnings + pose_step.warnings
-                    file_ops = file_ops + pose_step.file_ops
-
-                if config.lift_root is not None:
-                    _, lift_step = lift_pose_camera(crop_record, config)
-                    steps.append("lift")
-                    derived = {**derived, **lift_step.derived}
-                    warnings = warnings + lift_step.warnings
-                    file_ops = file_ops + lift_step.file_ops
-
-                if config.kinematics_root is not None:
-                    _, kinematics_step = solve_kinematics_camera(crop_record, config)
-                    steps.append("kinematics")
-                    derived = {**derived, **kinematics_step.derived}
-                    warnings = warnings + kinematics_step.warnings
-                    file_ops = file_ops + kinematics_step.file_ops
-
-                if config.phase_root is not None:
-                    _, phase_step = detect_phases_camera(crop_record, config)
-                    steps.append("phase")
-                    derived = {**derived, **phase_step.derived}
-                    warnings = warnings + phase_step.warnings
-                    file_ops = file_ops + phase_step.file_ops
             except ScanRejected as rejection:
                 manifest.rejected_scans.append(
                     RejectedScan(

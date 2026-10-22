@@ -11,8 +11,8 @@ import math
 import numpy as np
 import pytest
 
+from powerflow_pipeline.data.common.capture_models import Intrinsics
 from powerflow_pipeline.data.common.errors import ScanRejected
-from powerflow_pipeline.data.preprocess.models import Intrinsics
 from powerflow_pipeline.data.preprocess.retilt import (
     backproject,
     depth_intrinsics,

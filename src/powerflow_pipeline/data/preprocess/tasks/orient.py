@@ -19,6 +19,7 @@ import cv2
 import numpy as np
 from prefect import task
 
+from powerflow_pipeline.data.common.capture_models import CameraRecord, Intrinsics
 from powerflow_pipeline.data.common.errors import ScanRejected
 from powerflow_pipeline.data.common.filesystem import (
     cleanup,
@@ -26,6 +27,7 @@ from powerflow_pipeline.data.common.filesystem import (
     publish_staging,
     write_json,
 )
+from powerflow_pipeline.data.common.frames import read_frame
 from powerflow_pipeline.data.common.models import FileOp, StepResult
 from powerflow_pipeline.data.common.task_logging import log_task_paths
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig, RotationDirection
@@ -35,8 +37,7 @@ from powerflow_pipeline.data.preprocess.geometry import (
     rotated_size,
     transpose_filter,
 )
-from powerflow_pipeline.data.preprocess.models import CameraRecord, Intrinsics
-from powerflow_pipeline.data.preprocess.tasks.ingest import CONFIDENCE_VALUES, read_frame
+from powerflow_pipeline.data.preprocess.tasks.ingest import CONFIDENCE_VALUES
 
 PASSTHROUGH = ("imu.csv",)
 OUTPUT_TIME_BASE = Fraction(1, 90000)  # fine enough to keep B-frame DTS distinct (see rotate_rgb)

@@ -8,9 +8,9 @@ from typing import Any
 import numpy as np
 from pydantic import ValidationError
 
+from powerflow_pipeline.data.common.capture_models import Intrinsics
 from powerflow_pipeline.data.common.errors import ScanRejected
 from powerflow_pipeline.data.common.models import CropBounds
-from powerflow_pipeline.data.preprocess.models import Intrinsics
 from powerflow_pipeline.data.preprocess.retilt import quat_to_matrix
 
 

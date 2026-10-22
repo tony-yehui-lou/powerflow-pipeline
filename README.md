@@ -231,14 +231,23 @@ real rectangle, write it into the **raw** `metadata.yaml`, then rerun just that 
 
 ---
 
-## Run the pipeline
+## Run the pipelines
 
-There is no flag to stop early: every run does S0 Ingest → S1 Cut → S2 Orient → S3 Retilt →
-S4 Crop. `--barbell-checkpoint` appends S5 Barbell, and `--pose` appends S6 Pose after it. If S3 or S4 rejects a camera, its earlier
-stage outputs (S2, S3) are already published and are not rolled back — only the rejected
-stage's output is missing.
+Three pipelines run one after another, each reading only what the previous one published
+(`docs/superpowers/specs/2026-10-22-pipeline-phase-split-design.md`):
 
-### Recipe A — through S4 Crop
+| Pipeline | Stages | Re-run it when |
+|---|---|---|
+| `powerflow preprocess` | S0 Ingest → S1 Cut → S2 Orient → S3 Retilt → S4 Crop | the raw capture or a floor/crop setting changes (hours of re-encoding) |
+| `powerflow detect` | S5 Barbell, S6 Pose, S7 Lift (optional, off by default) | a checkpoint or pose model changes |
+| `powerflow analyze` | S8 Kinematics, S9 Phase | a rule or threshold changes (seconds; reads no video, loads no detector) |
+
+`powerflow all --data ../data` runs the three in order over the standard `sN_<stage>_output`
+folders, with every tunable at its default. If S3 or S4 rejects a camera, its earlier stage
+outputs (S2, S3) are already published and are not rolled back — only the rejected stage's
+output is missing, and detect and analyze never see the camera.
+
+### Recipe A — preprocess (S0–S4)
 
 ```bash
 cd powerflow-pipeline
@@ -257,16 +266,15 @@ uv run powerflow preprocess \
 
 Drop `--dry-run` once it reports what you expect.
 
-### Recipe B — through S6 Pose
+### Recipe B — detect: S6 Pose
 
-Same as Recipe A, plus `--pose`:
+detect reads S0–S4's published output, so it never re-encodes anything. Every detect and analyze
+command names the same four upstream roots (`--records`, `--cut`, `--retilt`, `--crop`):
 
 ```bash
-uv run powerflow preprocess \
-  --input   ../data/raw \
+uv run powerflow detect \
   --records ../data/s0_ingest_output \
   --cut     ../data/s1_cut_output \
-  --output  ../data/s2_orient_output \
   --retilt  ../data/s3_retilt_output \
   --crop    ../data/s4_crop_output \
   --pose    ../data/s6_pose_output \
@@ -274,8 +282,8 @@ uv run powerflow preprocess \
   --dry-run
 ```
 
-This re-runs S0–S4 too — S6 isn't a separate pass over existing S4 output, it's the same flow
-with one more stage attached. Optionally choose the 2D detector:
+A detect dry run plans against S4's published output, so run preprocess for real first.
+Optionally choose the 2D detector:
 
 ```bash
 --pose-detector mediapipe   # default: --pose-detector rtmpose --rtmpose-variant balanced
@@ -283,10 +291,10 @@ with one more stage attached. Optionally choose the 2D detector:
 
 The first run against a given detector/variant downloads its pretrained weights into
 `models_cache/` (git-ignored) — expect network access on that first run only. S6 writes one
-`pose.json` per surviving camera plus a single `skeleton.human-v2.json` at the pose root's top
-level, describing the joint topology every `pose.json` under it shares.
+`pose.json` per camera plus a single `skeleton.human-v2.json` at the pose root's top level,
+describing the joint topology every `pose.json` under it shares.
 
-### Recipe B2 — S5 Barbell
+### Recipe B2 — detect: S5 Barbell
 
 S5 runs the trained cap/collar detector over S4's RGB and publishes `barbell.json` per capture.
 It loads a checkpoint only through its card, so promote a training run once first (this copies
@@ -299,94 +307,118 @@ uv run python scripts/promote_barbell_model.py \
   ../data/models/s5_barbell/frcnn-v2-2026-10-19.pt
 ```
 
-Then:
+Then, with S6 in the same run so it corrects wrists against the detections S5 just published:
 
 ```bash
-uv run powerflow preprocess \
-  --input   ../data/raw \
+uv run powerflow detect \
   --records ../data/s0_ingest_output \
   --cut     ../data/s1_cut_output \
-  --output  ../data/s2_orient_output \
   --retilt  ../data/s3_retilt_output \
   --crop    ../data/s4_crop_output \
   --barbell ../data/s5_barbell_output \
   --barbell-checkpoint ../data/models/s5_barbell/frcnn-v2-2026-10-19.pt \
-  --only    '10 September/*' \
-  --dry-run
+  --pose    ../data/s6_pose_output \
+  --only    '10 September/*'
 ```
 
-Add `--pose` to the same run and S6 corrects wrists against the detections S5 just published.
 Expect about 0.43 s/frame on MPS (~3 minutes for a 433-frame capture); the manifest records
 the measured `barbell_s_per_frame`. A capture already published under `--barbell` is kept, not
 re-detected, unless `--overwrite`, so a rerun over a day only fills in what's missing. Add
 `--barbell-overlay` to also publish `overlay.mp4` with the boxes drawn, for review. Low
 coverage warns (`cap on 103/433 frames, below 50%`) and never rejects.
 
-### Recipe C — S8 Kinematics on an earlier run's poses
+S7 Lift (`--lift <root>`) back-projects S6's joints through LiDAR depth. It is off by default:
+nothing downstream reads it. With `--skip-detect` it lifts the poses already under `--pose`.
 
-`--skip-detect` reuses the poses already under `--pose`; `--barbell` without
-`--barbell-checkpoint` reuses S5's published detections and gives S8 the bar (and S6's
-`wrist_refinement.json` the grip), and the athlete measurements come from each capture's
-`metadata.yaml`:
+### Recipe C — analyze: S8 Kinematics and S9 Phase
+
+analyze reads S6's poses (`--pose`), S5's detections (`--barbell`, which gives S8 the bar and
+S9 its height track; S6's `wrist_refinement.json` gives the grip), and the athlete measurements
+from each capture's `metadata.yaml`:
 
 ```bash
-uv run powerflow preprocess \
-  --input      ../data/raw \
+uv run powerflow analyze \
   --records    ../data/s0_ingest_output \
   --cut        ../data/s1_cut_output \
-  --output     ../data/s2_orient_output \
   --retilt     ../data/s3_retilt_output \
   --crop       ../data/s4_crop_output \
-  --pose       ../data/s6_pose_output --skip-detect \
+  --pose       ../data/s6_pose_output \
   --barbell    ../data/s5_barbell_output \
   --kinematics ../data/s8_kinematics_output \
+  --phase      ../data/s9_phase_output \
   --only       '10 September/*' \
   --dry-run
 ```
 
-Like S6, this re-runs S0–S4. Read the manifest's `kinematics_*` values per capture: the floor
-anchor, frames solved per anchor (`bar+floor`, `floor`, `bar`, or why not), the closure error
-(the shoulders reached from the feet against from the hands), and each bone's source. Heights
-are each frame's solved value as is: nothing is smoothed, regularised or adjusted.
+Read the manifest's `kinematics_*` values per capture: the floor anchor, frames solved per
+anchor (`bar+floor`, `floor`, `bar`, or why not), the closure error (the shoulders reached from
+the feet against from the hands), and each bone's source. Heights are each frame's solved value
+as is: nothing is smoothed, regularised or adjusted.
+
+After changing an S9 rule, re-run S9 alone against the S8 tree already published — add
+`--stages s9` (and `--overwrite`) to the command above.
 
 ### Flags
+
+Shared by every pipeline:
+
+| Flag | Meaning |
+|---|---|
+| `--records` | Where S0 writes `record.json` and `metadata.yaml` (and preprocess its `manifest.json`). |
+| `--cut` | Where S1 publishes the trimmed, time-aligned landscape streams. |
+| `--retilt` | Where S3 publishes the rectified, floor-levelled streams. |
+| `--crop` | Where S4 publishes the cropped streams. |
+| `--only` | Process only captures whose id matches this glob, e.g. `'22 August/Snch/*'`. In preprocess, keep a two-camera session whole — see below. |
+| `--dry-run` | Validate and plan, write nothing. |
+| `--overwrite` | Replace cameras already published (default: refuse). |
+
+preprocess only:
 
 | Flag | Meaning |
 |---|---|
 | `--input` | Raw capture root; both shapes above, mixed freely. |
-| `--records` | Where S0 writes `record.json`, `metadata.yaml`, and `manifest.json`. |
-| `--cut` | Where S1 publishes the trimmed, time-aligned landscape streams. |
 | `--output` | Where S2 publishes the rotated portrait streams. |
-| `--retilt` | Where S3 publishes the rectified, floor-levelled streams. |
-| `--crop` | Where S4 publishes the cropped streams. |
-| `--pose` | Where S6 publishes detected 2D poses. Omit to skip S6 entirely. |
-| `--kinematics` | Where S8 publishes `joint_hva.json`: every joint's 3D position, height and angle, solved from S6's 2D pose, the [athlete measurements](#athlete-measurements), the bar (`--barbell`) and the floor. Needs `--pose`; reads no depth. See `docs/specs/preprocessing/S8-joint-hva-draft3.md` and, for the angles, `S8-joint-angles-draft3.md`. |
+| `--rotation` | `cw` (default) or `ccw`. |
+
+detect only:
+
+| Flag | Meaning |
+|---|---|
+| `--pose` | Where S6 publishes detected 2D poses. Omit to skip S6. |
+| `--lift` | Where S7 publishes poses lifted with LiDAR depth. Omit (the default) to skip S7. |
+| `--skip-detect` | Don't run S6; reuse the poses already under `--pose` (for S7). |
 | `--barbell` | S5's tree (`<path>/<capture path>/barbell.json`, e.g. `../data/s5_barbell_output`): written when `--barbell-checkpoint` runs S5, read either way. With `--pose`, S6 corrects both wrists against the bar — see `docs/specs/preprocessing/S6-wrist-refinement.md`. Omit to leave wrists as detected. |
-| `--barbell-checkpoint` | A promoted S5 model (`scripts/promote_barbell_model.py`). Runs S5 right after S4. Omit to read `--barbell` as already published. See `docs/specs/preprocessing/S5-barbell-detection-stage-draft3.md`. |
+| `--barbell-checkpoint` | A promoted S5 model (`scripts/promote_barbell_model.py`). Runs S5. Omit to read `--barbell` as already published. See `docs/specs/preprocessing/S5-barbell-detection-stage-draft3.md`. |
 | `--barbell-device` | `auto` (default: mps, then cuda, then cpu), `mps`, `cuda`, or `cpu`. |
 | `--barbell-overlay` | Also publish S5's `overlay.mp4`. |
 | `--pose-detector` | `rtmpose` (default) or `mediapipe`. |
 | `--rtmpose-variant` | `lightweight`, `balanced` (default), or `performance` — ignored with `--pose-detector mediapipe`. |
-| `--only` | Process only captures whose id matches this glob, e.g. `'22 August/Snch/*'`. Keep a two-camera session whole — see below. |
-| `--rotation` | `cw` (default) or `ccw`. |
-| `--dry-run` | Validate and plan, write nothing. |
-| `--overwrite` | Replace cameras already published (default: refuse). |
+
+analyze only:
+
+| Flag | Meaning |
+|---|---|
+| `--pose` | S6's published tree (required): the 2D joints S8 solves, and the grip. |
+| `--barbell` | S5's published tree. Without it S8 is anchored by the floor alone; S9 needs it. |
+| `--kinematics` | Where S8 publishes `joint_hva.json`: every joint's 3D position, height and angle, solved from S6's 2D pose, the [athlete measurements](#athlete-measurements), the bar and the floor. Reads no depth. S9 reads it either way. See `docs/specs/preprocessing/S8-joint-hva-draft4.md` and, for the angles, `S8-joint-angles-draft4.md`. |
+| `--phase` | Where S9 publishes `phase.json`. Needs `--kinematics` and `--barbell`. See `docs/specs/preprocessing/S9-phase-intervals-draft8.md`. |
+| `--stages` | Run only these stages (repeatable): `s8`, `s9`. Default: both. A stage also needs its root. |
 
 Start with `--dry-run`: it validates every camera and reports what *would* be written.
 
-`--only` selects **captures**, and a two-camera session derives its cut interval from its
-`Side` camera, so a glob that excludes it rejects the group with `session has no Side camera`.
-Match the session, not one camera:
+`--only` selects **captures**, and in preprocess a two-camera session derives its cut interval
+from its `Side` camera, so a glob that excludes it rejects the group with `session has no Side
+camera`. Match the session, not one camera:
 
 ```bash
 uv run powerflow preprocess ... --only '11 July/30kg_Set1/*'    # the session, both cameras
 uv run powerflow preprocess ... --only '22 August/Snch/110kgSnch1'  # a single-camera capture
 ```
 
-A full run over the four cameras in `data/raw/9 July` takes on the order of **10+ minutes** — it
-decodes, cuts, rotates, retilts, crops, and re-encodes ~22k frames four times — and produces
-several GB across all four stage outputs. Adding `--pose` adds a detector pass over S4's RGB on
-top of that.
+A full preprocess run over the four cameras in `data/raw/9 July` takes on the order of **10+
+minutes** — it decodes, cuts, rotates, retilts, crops, and re-encodes ~22k frames four times —
+and produces several GB across all four stage outputs. detect adds a detector pass over S4's
+RGB; analyze adds seconds.
 
 There is no `--in-place` mode. It would rewrite the raw capture, and raw data is write-once: each
 stage publishes to its own output root instead.
@@ -395,10 +427,10 @@ stage publishes to its own output root instead.
 
 | What | Where | Written by |
 |---|---|---|
-| **Run manifest** (JSON) | `<--records>/manifest.json` | end of the flow |
-| **Run manifest** (markdown) | Prefect artifact, key `preprocess-run-manifest` | end of the flow |
+| **Run manifest** (JSON) | preprocess: `<--records>/manifest.json`; detect: `manifest.json` in the root of the last stage it ran (`--lift`, else `--pose`, else `--barbell`); analyze: in `--phase` if S9 ran, else `--kinematics` | end of each flow |
+| **Run manifest** (markdown) | Prefect artifact, key `<pipeline>-run-manifest` | end of each flow |
 | Per-camera validated record | `<--records>/<capture path>/record.json` | S0 |
-| Per-group metadata | the raw `metadata.yaml`'s own relative path, in **all five** stage roots | S0 |
+| Per-group metadata | the raw `metadata.yaml`'s own relative path, in **all five** preprocess stage roots | S0 |
 | Trimmed landscape streams + provenance | `<--cut>/<capture path>/` incl. `cut_sidecar.json` | S1 |
 | Portrait streams + provenance | `<--output>/<capture path>/` incl. `sidecar.json` | S2 |
 | Floor-levelled portrait streams + provenance | `<--retilt>/<capture path>/` incl. `retilt_sidecar.json` | S3 |
@@ -407,6 +439,7 @@ stage publishes to its own output root instead.
 | 2D pose document | `<--pose>/<capture path>/pose.json`, plus `<--pose>/skeleton.human-v2.json` once per run | S6 |
 | Wrist correction record | `<--pose>/<capture path>/wrist_refinement.json`, only with `--barbell` | S6 |
 | Joint 3D positions, heights and angles | `<--kinematics>/<capture path>/joint_hva.json` | S8 |
+| Phase events and intervals | `<--phase>/<capture path>/phase.json` | S9 |
 
 `<capture path>` is the capture's raw-relative path — `11 July/30kg_Set1/Front` or
 `22 August/Snch/110kgSnch1` — so every stage tree matches its raw counterpart byte for byte in
@@ -414,9 +447,9 @@ path shape.
 
 Every stage output root **through S4** gets its own byte-identical copy of `metadata.yaml`, so a
 consumer of one stage never has to reach back into an earlier stage's tree to learn which lift the
-pixels came from. S6's `--pose` root deliberately does **not** get one: unlike S0–S4 it doesn't
-run for every camera in every run, so copying it there would leave orphaned files with no pose
-output beside them whenever a camera is skipped or `--pose` is omitted.
+pixels came from. The detect and analyze roots deliberately do **not** get one: their stages
+don't run for every camera in every run, so copying it there would leave orphaned files with no
+output beside them whenever a stage is skipped.
 
 The **manifest is the audit record for one run**: every camera processed, the values derived
 (rotation applied, `k_rewritten`, frame counts, cut epoch bounds), any warnings, and **every
@@ -481,16 +514,23 @@ distrusting even if nothing was rejected.
 
 ```
 src/powerflow_pipeline/data/
-  cli.py                  # typer entrypoint: builds config, invokes the flow
-  common/                 # shared @tasks and helpers: discovery, filesystem, manifest, errors
-  preprocess/
+  cli.py                  # typer entrypoint: one command per pipeline, plus `all`
+  common/                 # shared @tasks and helpers: discovery, filesystem, manifest, errors,
+                          # capture_models (CameraRecord, Intrinsics, ...), camera_records (rebuild
+                          # S4's record from disk), bar_geometry, barbell_input, frames
+  preprocess/             # S0-S4
     flow.py               # @flow, ordered orchestration only
     config.py             # PreprocessConfig
-    models.py             # CameraRecord, Intrinsics, CutInterval, ...
     geometry.py           # pure rotation maths: no I/O, no Prefect
     timeline.py           # pure epoch-time maths: no I/O, no Prefect
     retilt.py             # pure plane-fit/tilt/homography maths: no I/O, no Prefect
-    tasks/                # one @task per logical step: discover, ingest, cut, orient, retilt, crop, pose, metadata
+    tasks/                # discover, ingest, cut, orient, retilt, crop, metadata
+  detect/                 # S5-S7: the barbell and pose models, wrist refinement, the depth lift
+    flow.py, config.py    # DetectConfig
+    tasks/                # barbell, pose, lift
+  analyze/                # S8-S9: the skeleton solve, joint angles, phase rules
+    flow.py, config.py    # AnalyzeConfig
+    tasks/                # kinematics, phase
 prefect.yaml              # deployments
 tests/unit/               # fast, no Prefect backend
 tests/integration/        # flow + CLI, under prefect_test_harness

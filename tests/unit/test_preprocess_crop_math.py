@@ -9,6 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from powerflow_pipeline.data.common.capture_models import Intrinsics
 from powerflow_pipeline.data.common.errors import ScanRejected
 from powerflow_pipeline.data.common.models import CropBounds
 from powerflow_pipeline.data.preprocess.crop import (
@@ -23,7 +24,6 @@ from powerflow_pipeline.data.preprocess.crop import (
     reference_displacements,
     shrink_to_even,
 )
-from powerflow_pipeline.data.preprocess.models import Intrinsics
 
 # --- read_valid_bounds ------------------------------------------------------------------
 
