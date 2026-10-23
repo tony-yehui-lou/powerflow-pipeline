@@ -101,7 +101,7 @@ def test_publishes_phase_json_from_the_published_inputs(
     _, step = detect_phases_camera.fn(record, config)
 
     document = _published(config, record)
-    assert document["schemaVersion"] == "1.2.0"
+    assert document["schemaVersion"] == "1.3.0"
     assert document["captureId"] == record.capture_id
     assert document["lift"] == "clean_and_jerk"
     assert set(document["bands"]) >= {"knee", "hip", "rack", "overhead"}

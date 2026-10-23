@@ -419,3 +419,95 @@ def test_pair_height_weights_by_inverse_variance_and_drops_uncertain() -> None:
     assert paired[0] == pytest.approx((100 / 100 + 200 / 400) / (1 / 100 + 1 / 400))
     assert paired[1] == pytest.approx(200.0)
     assert paired[2] is None  # the only side left is above sigma_max
+
+
+# --- bar track (§6, draft 9) -------------------------------------------------------------------
+
+
+def _document(curve: Curve, found: pe.Detection) -> dict[str, object]:
+    return pe.to_document(
+        found,
+        capture_id="10 September/test",
+        t_ms=curve.t_ms,
+        start_epoch_ms=0,
+        body_bands=pe.bands(BODY, thresholds=T),
+        thresholds=T,
+        inputs={},
+    )
+
+
+def _bar_track(document: dict[str, object]) -> dict[str, list]:  # type: ignore[type-arg]
+    track = document["barTrack"]
+    assert isinstance(track, dict)
+    return track
+
+
+def test_the_document_is_1_3_0_and_names_draft_9() -> None:
+    curve = _curve(SNATCH_V)
+    document = _document(curve, _detect(curve, "snatch"))
+    assert document["schemaVersion"] == "1.3.0"
+    assert document["method"] == "docs/specs/preprocessing/S9-phase-intervals-draft9.md"
+
+
+def test_every_bar_track_array_has_one_entry_per_frame() -> None:
+    curve = _curve(CNJ_V)
+    track = _bar_track(_document(curve, _detect(curve, "clean_and_jerk")))
+    for name in ("rawMm", "heightMm", "velocityMmPerS"):
+        assert len(track[name]) == len(curve.t_ms), name
+    assert track["bridgedFrames"] == []
+
+
+def test_each_event_bar_height_is_the_published_track_there() -> None:
+    for v_knots, lift in ((SNATCH_V, "snatch"), (CNJ_V, "clean_and_jerk")):
+        curve = _curve(v_knots)
+        document = _document(curve, _detect(curve, lift))  # type: ignore[arg-type]
+        height = _bar_track(document)["heightMm"]
+        events = document["events"]
+        assert isinstance(events, dict)
+        for name, event in events.items():
+            if event["frame"] is not None:
+                assert event["barMm"] == height[event["frame"]], (lift, name)
+
+
+def test_a_short_gap_is_null_raw_filled_height_and_listed_as_bridged() -> None:
+    curve = _curve(SNATCH_V)
+    gap = range(100, 103)  # 3 frames, ~67 ms: under MAX_GAP
+    holed = _without(curve, gap)
+    track = _bar_track(_document(holed, _detect(holed, "snatch")))
+
+    assert [track["rawMm"][i] for i in gap] == [None, None, None]
+    assert all(track["heightMm"][i] is not None for i in gap)
+    assert track["bridgedFrames"] == list(gap)
+    assert track["rawMm"][99] == round(curve.bar[99], 1)  # type: ignore[arg-type]
+
+
+def test_a_long_gap_is_null_in_every_array() -> None:
+    curve = _curve(SNATCH_V)
+    gap = range(100, 110)  # 10 frames, ~167 ms: over MAX_GAP
+    holed = _without(curve, gap)
+    track = _bar_track(_document(holed, _detect(holed, "snatch")))
+
+    for name in ("rawMm", "heightMm", "velocityMmPerS"):
+        assert all(track[name][i] is None for i in gap), name
+    assert track["bridgedFrames"] == []
+
+
+def test_a_constant_velocity_bar_publishes_that_velocity() -> None:
+    # Whole-ms, even spacing (50 fps): rounding 60 fps times to whole ms alone moves a central
+    # difference by up to ~3%, which is the timestamps' resolution, not the track.
+    t = [i * 20 for i in range(240)]
+    curve = Curve(t_ms=t, bar=[225.0 + 0.8 * ms for ms in t], knee=[500.0] * len(t))  # 800 mm/s
+    track = _bar_track(_document(curve, _detect(curve, "snatch")))
+    inner = track["velocityMmPerS"][20:-20]
+    assert all(v == pytest.approx(800.0, rel=0.01) for v in inner)
+
+
+def test_with_no_bar_every_array_is_null_and_the_events_are_unchanged() -> None:
+    curve = _curve(SNATCH_V)
+    empty = replace(curve, bar=[None] * len(curve.t_ms))
+    found = _detect(empty, "snatch")
+    track = _bar_track(_document(empty, found))
+    for name in ("rawMm", "heightMm", "velocityMmPerS"):
+        assert track[name] == [None] * len(curve.t_ms), name
+    assert track["bridgedFrames"] == []
+    assert all(e.status == "absent" for e in found.events.values())

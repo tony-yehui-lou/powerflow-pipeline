@@ -173,6 +173,16 @@ class Span:
 
 
 @dataclass(frozen=True)
+class BarTrack:
+    """The track `detect` measured every event on, frame by frame (§6 `barTrack`)."""
+
+    raw_mm: Sequence[float | None]  # as S5/S8 gave it, before bridging and the filter
+    height_mm: Sequence[float | None]  # bridged and low-passed: what every rule reads
+    velocity_mm_per_s: Sequence[float | None]
+    bridged_frames: Sequence[int]
+
+
+@dataclass(frozen=True)
 class Detection:
     lift: Lift
     events: dict[str, Event]
@@ -181,6 +191,7 @@ class Detection:
     result: tuple[str, str]  # (value, source)
     flags: list[str]
     derived: dict[str, float | int | None] = field(default_factory=dict)
+    bar_track: BarTrack | None = None
 
 
 def bands(body: Body, *, thresholds: PhaseThresholds) -> Bands:
@@ -241,6 +252,7 @@ class _Track:
         steps = np.diff(self.t)
         self.dt = float(np.median(steps)) if len(steps) else 1000.0 / 60.0
         self.knee = signals.knee_mm
+        self.raw = list(signals.bar_mm)  # kept to publish as `barTrack.rawMm`
         bridged, self.gaps = _bridge(self.t, signals.bar_mm, thresholds.max_gap_ms, self.dt)
         self.h = _lowpass(self.t, bridged, thresholds.filter_cutoff_hz)
         self.v = _velocity(self.t, self.h)
@@ -684,11 +696,17 @@ def detect(
         result=_result(lift, events, flags, result_override),
         flags=flags,
         derived={"restMm": rest, "bridgedFrames": len(track.gaps)},
+        bar_track=BarTrack(
+            raw_mm=track.raw,
+            height_mm=track.h,
+            velocity_mm_per_s=track.v,
+            bridged_frames=sorted(track.gaps),
+        ),
     )
 
 
-SCHEMA_VERSION: Final = "1.2.0"
-METHOD_SPEC: Final = "docs/specs/preprocessing/S9-phase-intervals-draft7.md"
+SCHEMA_VERSION: Final = "1.3.0"
+METHOD_SPEC: Final = "docs/specs/preprocessing/S9-phase-intervals-draft9.md"
 # The raw operator metadata's `lift.type` for each lift S9 knows.
 LIFT_TYPES: Final[dict[str, Lift]] = {"snch": "snatch", "CnJ": "clean_and_jerk"}
 
@@ -737,6 +755,21 @@ def _bands_document(
     }
 
 
+def _bar_track_document(track: BarTrack | None, frames: int) -> dict[str, list[object]]:
+    """`barTrack` (§6): one entry per frame, 0.1 rounding; all null with no track, never absent."""
+
+    if track is None:
+        empty: list[object] = [None] * frames
+        return {"rawMm": empty, "heightMm": list(empty), "velocityMmPerS": list(empty),
+                "bridgedFrames": []}  # fmt: skip
+    return {
+        "rawMm": [_mm(x) for x in track.raw_mm],
+        "heightMm": [_mm(x) for x in track.height_mm],
+        "velocityMmPerS": [_mm(x) for x in track.velocity_mm_per_s],
+        "bridgedFrames": list(track.bridged_frames),
+    }
+
+
 def to_document(
     detection: Detection,
     *,
@@ -777,6 +810,7 @@ def to_document(
         "phases": [
             {"phase": s.phase, "startFrame": s.start, "endFrame": s.end} for s in detection.phases
         ],
+        "barTrack": _bar_track_document(detection.bar_track, len(t_ms)),
         "result": {"value": detection.result[0], "source": detection.result[1]},
         "flags": list(detection.flags),
         "provenance": {

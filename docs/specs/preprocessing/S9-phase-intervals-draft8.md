@@ -702,3 +702,15 @@ athlete, the formulas of §2.2 set the centres and the labels set the widths.
     speed rule, as a stopgap. That calls a press-out or a bar that reaches overhead and is then
     dropped a made lift. Options: the bar's peak inside the overhead band; the bar inside the band
     for a short time, with no speed limit; or a hold measured from the labels once they exist.
+
+---
+
+## Feedback (2026-10-23)
+
+- **Publish the bar track.** The product UI's graph view plots the bar's height over the phases,
+  and `powerflow-runtime` serves it from `phase.json`. S9 builds `h_bar` and `v_bar` and measures
+  every event on them, but publishes only the events' `barMm`. Add the per-frame track to
+  `phase.json` so the graph and the phases come from the same numbers. Also: `METHOD_SPEC` in the
+  code still names draft 7.
+
+Incorporated in [`S9-phase-intervals-draft9.md`](S9-phase-intervals-draft9.md).
