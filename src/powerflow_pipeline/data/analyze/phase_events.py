@@ -41,7 +41,6 @@ PHASES: Final[dict[Lift, tuple[tuple[str, str | None, str | None], ...]]] = {
         ("second_pull", "barPassesKnee", "fullExtension"),
         ("turnover", "fullExtension", "catch"),
         ("recovery", "catch", "stand"),
-        ("finish", "stand", None),
     ),
     "clean_and_jerk": (
         ("setup", None, "liftoff"),
@@ -52,7 +51,6 @@ PHASES: Final[dict[Lift, tuple[tuple[str, str | None, str | None], ...]]] = {
         ("dip", "dipStart", "dipBottom"),
         ("drive", "dipBottom", "jerkCatch"),
         ("jerk_recovery", "jerkCatch", "stand"),
-        ("finish", "stand", None),
     ),
 }
 
@@ -182,6 +180,19 @@ class BarTrack:
     bridged_frames: Sequence[int]
 
 
+WindowEnd = Literal["stand", "missed", "no_lift_end"]
+
+
+@dataclass(frozen=True)
+class Window:
+    """The lift window (§6.1): frames `start` to `end` (exclusive) hold the lift."""
+
+    start: int
+    end: int
+    end_reason: WindowEnd
+    margin_ms: float
+
+
 @dataclass(frozen=True)
 class Detection:
     lift: Lift
@@ -192,6 +203,7 @@ class Detection:
     flags: list[str]
     derived: dict[str, float | int | None] = field(default_factory=dict)
     bar_track: BarTrack | None = None
+    window: Window = Window(0, 0, "no_lift_end", 0.0)
 
 
 def bands(body: Body, *, thresholds: PhaseThresholds) -> Bands:
@@ -631,6 +643,21 @@ def _phases(lift: Lift, events: Mapping[str, Event], ends: Mapping[str, int], n:
     return spans
 
 
+def _window(track: _Track, stand: int | None, ends: Mapping[str, int], margin_ms: float) -> Window:
+    """The lift window (§6.1): to `margin_ms` past the stand, or past a miss's drop, clamped to the
+    clip end; the whole clip when there is neither."""
+
+    reason: WindowEnd
+    if stand is not None:
+        anchor, reason = stand, "stand"
+    elif ends:
+        anchor, reason = max(ends.values()), "missed"
+    else:
+        return Window(0, track.n, "no_lift_end", margin_ms)
+    end = next((i for i in range(anchor, track.n) if track.ms(anchor, i) > margin_ms), track.n)
+    return Window(0, end, reason, margin_ms)
+
+
 def _result(
     lift: Lift, events: Mapping[str, Event], flags: Sequence[str], override: object
 ) -> tuple[str, str]:
@@ -679,6 +706,9 @@ def detect(
         flags.append("bar_gap_bridged")
     if body_bands is not None and body_bands.grip_assumed:
         flags.append("grip_assumed")
+    window = _window(track, events["stand"].frame, ends, thresholds.window_margin_ms)
+    if window.end_reason == "no_lift_end":
+        flags.append("no_lift_end")
 
     phases = _phases(lift, events, ends, track.n)
     for span in phases:
@@ -702,11 +732,12 @@ def detect(
             velocity_mm_per_s=track.v,
             bridged_frames=sorted(track.gaps),
         ),
+        window=window,
     )
 
 
-SCHEMA_VERSION: Final = "1.3.0"
-METHOD_SPEC: Final = "docs/specs/preprocessing/S9-phase-intervals-draft9.md"
+SCHEMA_VERSION: Final = "1.4.0"
+METHOD_SPEC: Final = "docs/specs/preprocessing/S9-phase-intervals-draft10.md"
 # The raw operator metadata's `lift.type` for each lift S9 knows.
 LIFT_TYPES: Final[dict[str, Lift]] = {"snch": "snatch", "CnJ": "clean_and_jerk"}
 
@@ -810,6 +841,12 @@ def to_document(
         "phases": [
             {"phase": s.phase, "startFrame": s.start, "endFrame": s.end} for s in detection.phases
         ],
+        "liftWindow": {
+            "startFrame": detection.window.start,
+            "endFrame": detection.window.end,
+            "endReason": detection.window.end_reason,
+            "marginMs": detection.window.margin_ms,
+        },
         "barTrack": _bar_track_document(detection.bar_track, len(t_ms)),
         "result": {"value": detection.result[0], "source": detection.result[1]},
         "flags": list(detection.flags),

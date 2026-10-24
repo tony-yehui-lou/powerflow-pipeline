@@ -57,6 +57,9 @@ class PhaseThresholds(BaseModel):
     filter_cutoff_hz: float = Field(default=8.0, gt=0)
     # The bar's rest height is the median over this many opening frames, as S8's floor anchor.
     rest_frames: int = Field(default=60, ge=1)
+    # How long the lift window runs past the stand (or a miss's drop), so the lockout is kept:
+    # the stand is where the bar enters the overhead band, not where it settles (§6.1).
+    window_margin_ms: float = Field(default=500.0, ge=0)
     bands: BandTolerances = Field(default_factory=BandTolerances)
     clean_and_jerk: CleanAndJerkThresholds = Field(default_factory=CleanAndJerkThresholds)
 

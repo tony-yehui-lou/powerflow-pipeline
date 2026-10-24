@@ -751,3 +751,15 @@ athlete, the formulas of §2.2 set the centres and the labels set the widths.
     speed rule, as a stopgap. That calls a press-out or a bar that reaches overhead and is then
     dropped a made lift. Options: the bar's peak inside the overhead band; the bar inside the band
     for a short time, with no speed limit; or a hold measured from the labels once they exist.
+
+---
+
+## Feedback (2026-10-23)
+
+1. After the lift ends, cut the rest off: keep everything from the setup through the end of
+   recovery, plus a margin, and drop what follows.
+2. S9 records this as a lift window. It leaves every published file untouched.
+3. The `finish` phase goes.
+4. For a missed lift the window ends where the bar drops out of its band, plus the margin. With no
+   stand and no miss, the whole clip is kept and flagged.
+5. Write the next draft with that, then implement it.

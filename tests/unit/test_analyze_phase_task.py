@@ -101,7 +101,7 @@ def test_publishes_phase_json_from_the_published_inputs(
     _, step = detect_phases_camera.fn(record, config)
 
     document = _published(config, record)
-    assert document["schemaVersion"] == "1.3.0"
+    assert document["schemaVersion"] == "1.4.0"
     assert document["captureId"] == record.capture_id
     assert document["lift"] == "clean_and_jerk"
     assert set(document["bands"]) >= {"knee", "hip", "rack", "overhead"}
@@ -164,8 +164,9 @@ def test_a_snatch_curve_publishes_every_event_and_phase(
     assert events["catch"]["epochMs"] == 1_000_000 + events["catch"]["tMs"]
     assert round(document["bands"]["overhead"]["centreMm"]) == 1959
     assert [p["phase"] for p in document["phases"]] == [
-        "setup", "first_pull", "second_pull", "turnover", "recovery", "finish",
+        "setup", "first_pull", "second_pull", "turnover", "recovery",
     ]  # fmt: skip
+    assert document["liftWindow"]["endReason"] == "stand"
     assert document["result"] == {"value": "made", "source": "rules"}
     assert "grip_assumed" not in document["flags"]
     assert step.derived["phase_events_found"] == "5/5"

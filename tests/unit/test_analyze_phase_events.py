@@ -140,9 +140,9 @@ def test_snatch_phases_cover_every_frame_in_order() -> None:
     found = _detect(curve, "snatch")
 
     names = [p.phase for p in found.phases]
-    assert names == ["setup", "first_pull", "second_pull", "turnover", "recovery", "finish"]
+    assert names == ["setup", "first_pull", "second_pull", "turnover", "recovery"]
     assert found.phases[0].start == 0
-    assert found.phases[-1].end == len(curve.t_ms)
+    assert found.phases[-1].end == found.events["stand"].frame
     for a, b in zip(found.phases, found.phases[1:], strict=False):
         assert a.end == b.start and a.start < a.end
 
@@ -253,7 +253,7 @@ def test_clean_and_jerk_recovers_every_event() -> None:
     assert found.flags == []
     assert [p.phase for p in found.phases] == [
         "setup", "first_pull", "second_pull", "turnover", "clean_recovery", "dip", "drive",
-        "jerk_recovery", "finish",
+        "jerk_recovery",
     ]  # fmt: skip
 
 
@@ -442,11 +442,84 @@ def _bar_track(document: dict[str, object]) -> dict[str, list]:  # type: ignore[
     return track
 
 
-def test_the_document_is_1_3_0_and_names_draft_9() -> None:
+def test_the_document_is_1_4_0_and_names_draft_10() -> None:
     curve = _curve(SNATCH_V)
     document = _document(curve, _detect(curve, "snatch"))
-    assert document["schemaVersion"] == "1.3.0"
-    assert document["method"] == "docs/specs/preprocessing/S9-phase-intervals-draft9.md"
+    assert document["schemaVersion"] == "1.4.0"
+    assert document["method"] == "docs/specs/preprocessing/S9-phase-intervals-draft10.md"
+
+
+# --- lift window (§6.1) ------------------------------------------------------------------------
+
+
+def _first_frame_after(curve: Curve, frame: int, margin_ms: float) -> int:
+    return next(i for i, t in enumerate(curve.t_ms) if t > curve.t_ms[frame] + margin_ms)
+
+
+def test_a_made_lifts_window_ends_the_margin_after_the_stand() -> None:
+    curve = _curve(SNATCH_V)
+    found = _detect(curve, "snatch")
+
+    stand = found.events["stand"].frame
+    assert stand is not None
+    window = found.window
+    assert (window.start, window.end_reason) == (0, "stand")
+    assert window.end == _first_frame_after(curve, stand, T.window_margin_ms)
+    assert window.end < len(curve.t_ms)
+    assert "no_lift_end" not in found.flags
+
+
+def test_the_window_is_clamped_to_the_clip_end() -> None:
+    curve = _curve(SNATCH_V)
+    stand = _detect(curve, "snatch").events["stand"].frame
+    assert stand is not None
+    short = replace(  # the clip stops 100 ms after the stand
+        curve,
+        t_ms=curve.t_ms[: stand + 7], bar=curve.bar[: stand + 7], knee=curve.knee[: stand + 7],
+    )  # fmt: skip
+    found = _detect(short, "snatch")
+
+    assert found.window.end_reason == "stand"
+    assert found.window.end == len(short.t_ms)
+
+
+def test_a_clean_and_jerks_window_ends_after_jerk_recovery() -> None:
+    curve = _curve(CNJ_V)
+    found = _detect(curve, "clean_and_jerk")
+
+    stand = found.events["stand"].frame
+    assert stand is not None and found.phases[-1].phase == "jerk_recovery"
+    assert found.window.end == _first_frame_after(curve, stand, T.window_margin_ms)
+
+
+def test_a_missed_lifts_window_ends_the_margin_after_the_drop() -> None:
+    v = [*SNATCH_V[:8], (2100, 300), (2200, 0), (2400, -4500), (2650, 0), (4000, 0)]
+    curve = _curve(v)
+    found = _detect(curve, "snatch")
+
+    drop = found.phases[-1].end
+    assert found.window.end_reason == "missed"
+    assert found.window.end == _first_frame_after(curve, drop, T.window_margin_ms)
+
+
+def test_with_no_stand_and_no_miss_the_window_is_the_whole_clip() -> None:
+    v = [*SNATCH_V[:8], (2150, 700), (2350, 0), (4000, 0)]  # stops below overhead
+    curve = _curve(v)
+    found = _detect(curve, "snatch")
+
+    assert found.window.end_reason == "no_lift_end"
+    assert (found.window.start, found.window.end) == (0, len(curve.t_ms))
+    assert "no_lift_end" in found.flags
+
+
+def test_the_document_carries_the_window() -> None:
+    curve = _curve(SNATCH_V)
+    found = _detect(curve, "snatch")
+    window = _document(curve, found)["liftWindow"]
+    assert window == {
+        "startFrame": 0, "endFrame": found.window.end, "endReason": "stand",
+        "marginMs": T.window_margin_ms,
+    }  # fmt: skip
 
 
 def test_every_bar_track_array_has_one_entry_per_frame() -> None:
