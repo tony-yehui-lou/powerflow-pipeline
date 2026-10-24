@@ -512,3 +512,18 @@ Manifest `derived`:
    still holds, §4 does not. It answers S8 draft 3's open question 5 with "not in v1".
 6. **Horizontal bar path.** The same machinery per axis, with an L∞ bound per axis, not on speed.
    Deferred to bar-height draft 6.
+
+---
+
+## Feedback (2026-10-24)
+
+- **User:** do the **barbell first**. Rewrite the spec for the bar alone, with a clear section
+  listing the parameters that have to be fixed.
+- **Incorporated in:** [`S9-hva-tikhonov-draft2.md`](S9-hva-tikhonov-draft2.md).
+  - The bar's height is no longer read from S8. S9 solves the bar track itself from S5's
+    detections, so it needs `--barbell` and does not need `--pose` or `--kinematics`.
+  - With one series per capture, open question 1 (one α per series or per capture) goes away for
+    now.
+  - The parameters are collected in one section, split three ways: decide now, calibrate on the
+    captures, and fixed by the theory.
+  - Joints move to a later draft, which reuses `tikhonov.py` unchanged.
