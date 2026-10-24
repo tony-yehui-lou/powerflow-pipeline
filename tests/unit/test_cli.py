@@ -344,6 +344,25 @@ def test_stages_selects_s9_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert config.runs_phase
 
 
+def test_bar_hva_hands_s10_its_root_and_the_decided_bounds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _capture(monkeypatch, "analyze")
+
+    result = runner.invoke(
+        app,
+        _analyze_args(
+            tmp_path, "--barbell", str(tmp_path / "s5"), "--bar-hva", str(tmp_path / "s10")
+        ),
+    )
+
+    assert result.exit_code == 0, result.output
+    [(config,)] = calls
+    assert config.bar_hva_root == tmp_path / "s10"
+    assert config.runs_bar_hva and not config.runs_kinematics and not config.runs_phase
+    assert (config.bar_hva.v_max_mps, config.bar_hva.a_max_mps2) == (5.0, 25.0)
+
+
 def test_analyze_requires_the_pose_tree(tmp_path: Path) -> None:
     result = runner.invoke(app, ["analyze", *_upstream(tmp_path)])
 
@@ -384,4 +403,5 @@ def test_all_runs_the_three_pipelines_in_order_over_the_standard_folders(
     assert det.lift_root is None
     assert isinstance(detector, _StubDetector)
     assert ana.phase_root == tmp_path / "s9_phase_output"
+    assert ana.bar_hva_root == tmp_path / "s10_hva_output"
     assert pre.only == det.only == ana.only == "10 September/*"

@@ -1,4 +1,4 @@
-"""Run configuration for the analyze pipeline (S8 kinematics, S9 phase)."""
+"""Run configuration for the analyze pipeline (S8 kinematics, S9 phase, S10 bar HVA)."""
 
 from __future__ import annotations
 
@@ -15,6 +15,30 @@ class AnalyzeStage(StrEnum):
 
     KINEMATICS = "s8"
     PHASE = "s9"
+    BAR_HVA = "s10"
+
+
+class CollarOnly(StrEnum):
+    """What S10 does with frames S5 placed from the collar alone (S10 draft 2, P3)."""
+
+    OBSERVE = "observe"  # data, weight 1, flagged `collar_only`
+    MASK = "mask"  # empty nodes, filled by the bending interpolant
+
+
+class BarHvaSettings(BaseModel):
+    """S10 Bar HVA's decisions (docs/specs/preprocessing/S10-hva-tikhonov-draft2.md §9.1).
+
+    The bounds are a safety net the true bar must stay inside, not the smoother: peak bar
+    velocity in a snatch is ~2 m/s, and the lift window ends before the drop.
+    """
+
+    v_max_mps: float = Field(default=5.0, gt=0)  # P1
+    a_max_mps2: float = Field(default=25.0, gt=0)  # P2
+    collar_only: CollarOnly = CollarOnly.OBSERVE  # P3
+    tau: float = Field(default=1.1, ge=1.0)  # P4, the discrepancy factor
+    # P5: inflates delta for noise the third differences cannot see; 1 until the rest-window
+    # calibration of §9.2 says otherwise.
+    kappa: float = Field(default=1.0, ge=1.0)
 
 
 class CleanAndJerkThresholds(BaseModel):
@@ -87,8 +111,16 @@ class AnalyzeConfig(RunOptions):
     # S6's grip, so it needs `kinematics_root` and `barbell_root`; setting it without them is
     # rejected.
     phase_root: Path | None = None
-    stages: tuple[AnalyzeStage, ...] = (AnalyzeStage.KINEMATICS, AnalyzeStage.PHASE)
+    # S10 Bar HVA's tree. It solves the bar track from S5's detections itself, so it needs
+    # `barbell_root`, and neither S8 nor S9.
+    bar_hva_root: Path | None = None
+    stages: tuple[AnalyzeStage, ...] = (
+        AnalyzeStage.KINEMATICS,
+        AnalyzeStage.PHASE,
+        AnalyzeStage.BAR_HVA,
+    )
     phase: PhaseThresholds = Field(default_factory=PhaseThresholds)
+    bar_hva: BarHvaSettings = Field(default_factory=BarHvaSettings)
     # S8 ignores S5 detections below this, as S6 does. Real ones score >= 0.95 almost everywhere.
     barbell_min_score: float = Field(default=0.5, ge=0.0, le=1.0)
     # Where S6 put each clavicle along the neck -> shoulder line; S8 derives the clavicles the
@@ -102,3 +134,7 @@ class AnalyzeConfig(RunOptions):
     @property
     def runs_phase(self) -> bool:
         return AnalyzeStage.PHASE in self.stages and self.phase_root is not None
+
+    @property
+    def runs_bar_hva(self) -> bool:
+        return AnalyzeStage.BAR_HVA in self.stages and self.bar_hva_root is not None

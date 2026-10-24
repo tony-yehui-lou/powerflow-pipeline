@@ -81,7 +81,9 @@ def read_grip(sidecar_path: Path) -> tuple[frozenset[int], float | None, Any]:
     return frozenset(sidecar.get("farCorrected", [])), sidecar.get("halfGripMm"), side
 
 
-def _floor_offset_mm(config: AnalyzeConfig, record: CameraRecord) -> float | None:
+def floor_offset_mm(config: AnalyzeConfig, record: CameraRecord) -> float | None:
+    """S3's floor offset in mm, the floor anchor's fallback; None without S3's sidecar."""
+
     path = config.retilt_root / record.relative / "retilt_sidecar.json"
     if not path.is_file():
         return None
@@ -125,7 +127,7 @@ def solve_kinematics_camera(
             hands_on_bar=hands_on_bar,
             half_grip_mm=half_grip,
             near_side=near_side,
-            floor_offset_mm=_floor_offset_mm(config, record),
+            floor_offset_mm=floor_offset_mm(config, record),
             athlete=athlete_input.read_athlete(record.metadata_path),
             clavicle_shoulder_weight=config.rtmpose_clavicle_shoulder_weight,
         )

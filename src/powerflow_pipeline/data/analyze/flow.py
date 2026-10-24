@@ -1,4 +1,4 @@
-"""The analyze flow: S8 kinematics, S9 phase.
+"""The analyze flow: S8 kinematics, S9 phase, S10 bar HVA.
 
 Ordered orchestration only.
 
@@ -14,6 +14,7 @@ from pathlib import Path
 from prefect import flow
 
 from powerflow_pipeline.data.analyze.config import AnalyzeConfig
+from powerflow_pipeline.data.analyze.tasks.bar_hva import solve_bar_hva_camera
 from powerflow_pipeline.data.analyze.tasks.kinematics import solve_kinematics_camera
 from powerflow_pipeline.data.analyze.tasks.phase import detect_phases_camera
 from powerflow_pipeline.data.common.camera_records import discover_published_cameras
@@ -30,8 +31,8 @@ def analyze(config: AnalyzeConfig) -> RunManifest:
     """Solve the joints in 3D and split each lift into its phases. Or reject, with a reason.
 
     S8 runs when it is selected and `config.kinematics_root` is set; S9 likewise with
-    `config.phase_root`. S9 reads S8's published `joint_hva.json`, whether this run wrote it or
-    an earlier one did.
+    `config.phase_root`, and S10 with `config.bar_hva_root`. S9 reads S8's published
+    `joint_hva.json`, whether this run wrote it or an earlier one did; S10 reads S5 alone.
     """
 
     if config.runs_phase and config.kinematics_root is None:
@@ -42,15 +43,20 @@ def analyze(config: AnalyzeConfig) -> RunManifest:
         raise ValueError(
             "config.phase_root is set but config.barbell_root is unset: no bar to segment"
         )
-    if not (config.runs_kinematics or config.runs_phase):
+    if config.runs_bar_hva and config.barbell_root is None:
         raise ValueError(
-            "nothing to run: select S8 with a kinematics root, or S9 with a phase root"
+            "config.bar_hva_root is set but config.barbell_root is unset: no bar to differentiate"
+        )
+    if not (config.runs_kinematics or config.runs_phase or config.runs_bar_hva):
+        raise ValueError(
+            "nothing to run: select S8 with a kinematics root, S9 with a phase root, "
+            "or S10 with a bar HVA root"
         )
 
     context = RunContext.create(
         pipeline=PIPELINE,
         input_root=config.pose_root,
-        output_root=config.phase_root if config.runs_phase else config.kinematics_root,
+        output_root=_last_root(config),
         output_mode=OutputMode.PUBLISH,
         dry_run=config.dry_run,
     )
@@ -74,6 +80,8 @@ def analyze(config: AnalyzeConfig) -> RunManifest:
                 ran.append(("kinematics", solve_kinematics_camera(record, config)[1]))
             if config.runs_phase:
                 ran.append(("phase", detect_phases_camera(record, config)[1]))
+            if config.runs_bar_hva:
+                ran.append(("bar_hva", solve_bar_hva_camera(record, config)[1]))
         except ScanRejected as rejection:
             manifest.rejected_scans.append(
                 RejectedScan(scan_id=record.capture_id, source=record.source, reason=str(rejection))
@@ -87,8 +95,16 @@ def analyze(config: AnalyzeConfig) -> RunManifest:
     return emit_manifest(manifest, manifest_path)
 
 
+def _last_root(config: AnalyzeConfig) -> Path | None:
+    """The tree of the last stage this run runs: S10, else S9, else S8."""
+
+    if config.runs_bar_hva:
+        return config.bar_hva_root
+    return config.phase_root if config.runs_phase else config.kinematics_root
+
+
 def _manifest_path(root: Path | None) -> Path:
-    """The run's manifest sits in the tree of the last stage it ran: S9, else S8."""
+    """The run's manifest sits in the tree of the last stage it ran: S10, else S9, else S8."""
 
     assert root is not None  # publish mode always has an output root
     root.mkdir(parents=True, exist_ok=True)

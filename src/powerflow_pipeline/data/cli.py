@@ -296,13 +296,24 @@ def analyze(
             ),
         ),
     ] = None,
+    bar_hva_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--bar-hva",
+            help=(
+                "Where S10 publishes bar_hva.json: the bar centre's height, velocity and "
+                "acceleration, by box-constrained Tikhonov regularisation of S5's bar track. "
+                "Needs --barbell; needs neither --kinematics nor --phase."
+            ),
+        ),
+    ] = None,
     stages: Annotated[
         list[AnalyzeStage] | None,
         typer.Option(
             "--stages",
             help=(
                 "Run only these stages (repeatable), e.g. --stages s9 to re-run S9 against the "
-                "S8 tree already in --kinematics. Default: s8 and s9."
+                "S8 tree already in --kinematics. Default: s8, s9 and s10."
             ),
         ),
     ] = None,
@@ -310,9 +321,10 @@ def analyze(
     dry_run: DryRun = False,
     overwrite: Overwrite = False,
 ) -> None:
-    """Solve the joints in 3D from the lifter's body measurements (S8, with `--kinematics`)
-    and split each rep into its lift's phases (S9, with `--phase`), from what preprocess and
-    detect published. Reads no video and loads no detector.
+    """Solve the joints in 3D from the lifter's body measurements (S8, with `--kinematics`),
+    split each rep into its lift's phases (S9, with `--phase`) and differentiate the bar's
+    height (S10, with `--bar-hva`), from what preprocess and detect published. Reads no video
+    and loads no detector.
     """
 
     config = AnalyzeConfig(
@@ -324,6 +336,7 @@ def analyze(
         barbell_root=barbell_root,
         kinematics_root=kinematics_root,
         phase_root=phase_root,
+        bar_hva_root=bar_hva_root,
         only=only,
         dry_run=dry_run,
         overwrite=overwrite,
@@ -401,6 +414,7 @@ def all_pipelines(
                 barbell_root=barbell_root,
                 kinematics_root=data_root / "s8_kinematics_output",
                 phase_root=data_root / "s9_phase_output",
+                bar_hva_root=data_root / "s10_hva_output",
                 only=only,
                 overwrite=overwrite,
             )

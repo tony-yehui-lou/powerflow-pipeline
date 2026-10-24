@@ -145,6 +145,30 @@ def test_analyze_refuses_a_run_with_nothing_to_do(
         analyze(config)
 
 
+def test_analyze_rejects_a_bar_hva_root_without_a_barbell_root(
+    tmp_path: Path, upstream: PreprocessConfig
+) -> None:
+    config = make_config(tmp_path, upstream, bar_hva_root=tmp_path / "s10_hva_output")
+
+    with pytest.raises(ValueError, match="no bar to differentiate"):
+        analyze(config)
+
+
+def test_s10_runs_alone_and_keeps_its_manifest(tmp_path: Path, upstream: PreprocessConfig) -> None:
+    """S10 needs neither S8 nor S9. Detect published no bar here, so it says so per camera."""
+
+    config = make_config(
+        tmp_path, upstream, barbell_root=tmp_path / "s5", bar_hva_root=tmp_path / "s10_hva_output"
+    )
+
+    manifest = analyze(config)
+
+    assert manifest.scans
+    assert all(scan.steps == ["bar_hva"] for scan in manifest.scans)
+    assert all(any("bar HVA not solved" in w for w in scan.warnings) for scan in manifest.scans)
+    assert (tmp_path / "s10_hva_output" / "manifest.json").is_file()
+
+
 def test_analyze_rejects_a_phase_root_without_a_kinematics_root(
     tmp_path: Path, upstream: PreprocessConfig
 ) -> None:
