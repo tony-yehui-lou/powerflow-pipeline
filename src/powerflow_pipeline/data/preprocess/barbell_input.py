@@ -13,7 +13,9 @@ from typing import Final
 
 import yaml
 
-from powerflow_pipeline.data.preprocess.bar_geometry import Pixel
+from powerflow_pipeline.data.preprocess.bar_geometry import BAR_TYPES, BarPose, Pixel, solve_track
+from powerflow_pipeline.data.preprocess.config import PreprocessConfig
+from powerflow_pipeline.data.preprocess.models import CameraRecord
 
 DETECTIONS_FILENAME: Final = "predictions.json"
 
@@ -63,3 +65,32 @@ def read_bar_type(metadata_path: Path) -> str | None:
     lift = loaded.get("lift") if isinstance(loaded, dict) else None
     value = lift.get("barbell_type") if isinstance(lift, dict) else None
     return value if isinstance(value, str) else None
+
+
+def bar_track(
+    record: CameraRecord, config: PreprocessConfig
+) -> tuple[list[BarPose | None], list[str]]:
+    """S5's bar on every frame it can be placed, or no bar with a warning saying why.
+
+    The warning names the cause only; each caller adds what the missing bar costs it.
+    """
+
+    none: list[BarPose | None] = [None] * record.n_frames
+    if config.barbell_root is None:
+        return none, ["no --barbell"]
+    path = detections_path(config.barbell_root, record.relative)
+    if not path.is_file():
+        return none, [f"no barbell detections at {path}"]
+    bar_type = read_bar_type(record.metadata_path)
+    if bar_type not in BAR_TYPES:
+        return none, [f"barbell type {bar_type!r} is not one of {sorted(BAR_TYPES)}"]
+    try:
+        caps, collars = read_detections(
+            path,
+            n_frames=record.n_frames,
+            frame_size=(record.rgb_width, record.rgb_height),
+            min_score=config.barbell_min_score,
+        )
+    except ValueError as error:
+        return none, [str(error)]
+    return solve_track(caps, collars, record.intrinsics, BAR_TYPES[bar_type]), []

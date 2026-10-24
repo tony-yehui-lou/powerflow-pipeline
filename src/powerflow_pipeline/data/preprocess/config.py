@@ -24,6 +24,13 @@ class RTMPoseVariant(StrEnum):
     PERFORMANCE = "performance"
 
 
+class CollarOnly(StrEnum):
+    """What S9 Bar HVA does with frames S5 placed from the collar alone (S9 draft 2, P3)."""
+
+    OBSERVE = "observe"  # data, weight 1, flagged `collar_only`
+    MASK = "mask"  # empty nodes, filled by the bending interpolant
+
+
 class RotationDirection(StrEnum):
     """The 90 degree rotation that repairs the capture app's landscape output."""
 
@@ -63,6 +70,19 @@ class PreprocessConfig(BaseModel):
     # wrist is occluded and the detector's guess jumps hundreds of pixels. Unset leaves S6's
     # wrists exactly as detected.
     barbell_root: Path | None = None
+    # S9 Bar HVA is optional: unset skips it. It solves the bar track from S5's detections
+    # itself, so setting it without `barbell_root` is rejected; it needs neither S6 nor S8.
+    bar_hva_root: Path | None = None
+    # S9 Bar HVA's decisions (docs/specs/preprocessing/S9-hva-tikhonov-draft2.md §9.1). The
+    # bounds are a safety net the true bar must stay inside, not the smoother: peak bar
+    # velocity in a snatch is ~2 m/s, and the lift window ends before the drop.
+    bar_hva_v_max_mps: float = Field(default=5.0, gt=0)  # P1
+    bar_hva_a_max_mps2: float = Field(default=25.0, gt=0)  # P2
+    bar_hva_collar_only: CollarOnly = CollarOnly.OBSERVE  # P3
+    bar_hva_tau: float = Field(default=1.1, ge=1.0)  # P4, the discrepancy factor
+    # P5: inflates delta for noise the third differences cannot see; 1 until the rest-window
+    # calibration of §9.2 says otherwise.
+    bar_hva_kappa: float = Field(default=1.0, ge=1.0)
     # Cap/collar detections below this score are not used to place the bar.
     barbell_min_score: float = Field(default=0.5, ge=0.0, le=1.0)
     # Reuse whatever S6 already published in `pose_root` instead of re-running detection.

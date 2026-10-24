@@ -263,3 +263,34 @@ def test_without_kinematics_flag_s8_is_skipped(
     assert result.exit_code == 0, result.output
     config, _ = calls[0]
     assert config.kinematics_root is None
+
+
+def test_bar_hva_flag_enables_s9(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _capture_flow_call(monkeypatch)
+    (tmp_path / "raw").mkdir()
+
+    result = runner.invoke(
+        app,
+        _preprocess_args(
+            tmp_path, "--barbell", str(tmp_path / "s5"), "--bar-hva", str(tmp_path / "s9")
+        ),
+    )
+
+    assert result.exit_code == 0, result.output
+    config, _ = calls[0]
+    assert config.bar_hva_root == tmp_path / "s9"
+    assert config.bar_hva_v_max_mps == 5.0
+    assert config.bar_hva_a_max_mps2 == 25.0
+
+
+def test_without_bar_hva_flag_s9_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _capture_flow_call(monkeypatch)
+    (tmp_path / "raw").mkdir()
+
+    result = runner.invoke(app, _preprocess_args(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    config, _ = calls[0]
+    assert config.bar_hva_root is None

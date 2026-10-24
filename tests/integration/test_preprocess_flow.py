@@ -407,6 +407,43 @@ def test_preprocess_rejects_a_kinematics_root_without_a_pose_root(
         preprocess(config)
 
 
+def test_preprocess_rejects_a_bar_hva_root_without_a_barbell_root(
+    tmp_path: Path,
+    make_camera: MakeCamera,
+    make_meta_template: Any,
+    make_session_metadata: Any,
+) -> None:
+    raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
+    config = make_config(tmp_path, raw, bar_hva_root=tmp_path / "s9_hva_output")
+
+    with pytest.raises(ValueError, match="no bar to differentiate"):
+        preprocess(config)
+
+
+def test_the_run_differentiates_the_bar_when_a_bar_hva_root_is_given(
+    tmp_path: Path,
+    make_camera: MakeCamera,
+    make_meta_template: Any,
+    make_session_metadata: Any,
+) -> None:
+    """S9 needs neither S6 nor S8. No detections were published here, so it says so."""
+
+    raw = build_capture(tmp_path, make_camera, make_meta_template, make_session_metadata)
+    config = make_config(
+        tmp_path,
+        raw,
+        barbell_root=tmp_path / "s5",
+        bar_hva_root=tmp_path / "s9_hva_output",
+    )
+
+    manifest = preprocess(config)
+
+    assert manifest.scans
+    for scan in manifest.scans:
+        assert "bar_hva" in scan.steps
+        assert any("bar HVA not solved" in w for w in scan.warnings)
+
+
 def test_the_run_solves_kinematics_when_a_kinematics_root_is_given(
     tmp_path: Path,
     make_camera: MakeCamera,

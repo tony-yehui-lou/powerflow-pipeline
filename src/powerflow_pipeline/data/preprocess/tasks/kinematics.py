@@ -22,42 +22,16 @@ from powerflow_pipeline.data.common.models import FileOp, StepResult
 from powerflow_pipeline.data.common.pose_storage import pose_path, read_pose, write_sidecar
 from powerflow_pipeline.data.common.task_logging import log_task_paths
 from powerflow_pipeline.data.preprocess import athlete_input, barbell_input, joint_hva
-from powerflow_pipeline.data.preprocess.bar_geometry import BAR_TYPES, BarPose, solve_track
 from powerflow_pipeline.data.preprocess.config import PreprocessConfig
 from powerflow_pipeline.data.preprocess.models import CameraRecord
 from powerflow_pipeline.data.preprocess.tasks.pose import WRIST_REFINEMENT_FILENAME
+from powerflow_pipeline.data.preprocess.tasks.retilt import floor_offset_mm
 
 KINEMATICS_FILENAME: Final = "joint_hva.json"
 
 
 def kinematics_path(kinematics_root: Path, record: CameraRecord) -> Path:
     return kinematics_root / record.relative / KINEMATICS_FILENAME
-
-
-def _bar_track(
-    record: CameraRecord, config: PreprocessConfig
-) -> tuple[list[BarPose | None], list[str]]:
-    """S5's bar on every frame it can be placed, or no bar with a warning saying why."""
-
-    none: list[BarPose | None] = [None] * record.n_frames
-    if config.barbell_root is None:
-        return none, ["no --barbell: joints are anchored by the floor alone"]
-    path = barbell_input.detections_path(config.barbell_root, record.relative)
-    if not path.is_file():
-        return none, [f"no barbell detections at {path}: joints anchored by the floor alone"]
-    bar_type = barbell_input.read_bar_type(record.metadata_path)
-    if bar_type not in BAR_TYPES:
-        return none, [f"barbell type {bar_type!r} is not one of {sorted(BAR_TYPES)}: no bar"]
-    try:
-        caps, collars = barbell_input.read_detections(
-            path,
-            n_frames=record.n_frames,
-            frame_size=(record.rgb_width, record.rgb_height),
-            min_score=config.barbell_min_score,
-        )
-    except ValueError as error:
-        return none, [f"{error}: no bar"]
-    return solve_track(caps, collars, record.intrinsics, BAR_TYPES[bar_type]), []
 
 
 def _grip(sidecar_path: Path) -> tuple[frozenset[int], float | None, Any]:
@@ -73,14 +47,6 @@ def _grip(sidecar_path: Path) -> tuple[frozenset[int], float | None, Any]:
     near = sidecar.get("near")
     side = "left" if near == "leftWrist" else "right" if near == "rightWrist" else None
     return frozenset(sidecar.get("farCorrected", [])), sidecar.get("halfGripMm"), side
-
-
-def _floor_offset_mm(config: PreprocessConfig, record: CameraRecord) -> float | None:
-    path = config.retilt_root / record.relative / "retilt_sidecar.json"
-    if not path.is_file():
-        return None
-    offset: float = json.loads(path.read_text())["floor_offset_m"]
-    return offset * 1000.0
 
 
 @task(retries=1)
@@ -106,7 +72,8 @@ def solve_kinematics_camera(
         return record, StepResult(warnings=[f"kinematics not solved: no S6 pose at {source}"])
 
     pose = read_pose(source)
-    bars, warnings = _bar_track(record, config)
+    bars, missing = barbell_input.bar_track(record, config)
+    warnings = [f"{cause}: joints are anchored by the floor alone" for cause in missing]
     hands_on_bar, half_grip, near_side = _grip(source.parent / WRIST_REFINEMENT_FILENAME)
     if config.barbell_root is not None and half_grip is None:
         warnings.append("no wrist_refinement.json from S6: the hands are not placed on the bar")
@@ -119,7 +86,7 @@ def solve_kinematics_camera(
             hands_on_bar=hands_on_bar,
             half_grip_mm=half_grip,
             near_side=near_side,
-            floor_offset_mm=_floor_offset_mm(config, record),
+            floor_offset_mm=floor_offset_mm(config.retilt_root, record.relative),
             athlete=athlete_input.read_athlete(record.metadata_path),
             clavicle_shoulder_weight=config.rtmpose_clavicle_shoulder_weight,
         )

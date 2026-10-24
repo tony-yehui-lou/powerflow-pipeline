@@ -13,13 +13,12 @@ stand-in.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Final
 
-import av
 from prefect import task
 
+from powerflow_pipeline.data.common.frame_clock import capture_start_epoch_ms, frame_offsets_ms
 from powerflow_pipeline.data.common.models import (
     FileOp,
     Frames,
@@ -125,36 +124,6 @@ def _refine_wrists(
     return corrected, derived, [], sidecar
 
 
-def _frame_offsets_ms(rgb_path: Path) -> list[int]:
-    """Each frame's offset from the first, in milliseconds, read from `rgb_path`'s own PTS.
-
-    S1 Cut rebased this stream onto a zero-based, odometry-derived timeline (`trim_rgb`); S2-S4
-    only touch pixels, never PTS, so the container still carries that exact timeline here.
-    """
-
-    offsets: list[int] = []
-    with av.open(str(rgb_path)) as container:
-        stream = container.streams.video[0]
-        for frame in container.decode(stream):
-            assert frame.pts is not None, f"{rgb_path}: frame carries no PTS"
-            assert frame.time_base is not None, f"{rgb_path}: frame carries no time_base"
-            offsets.append(round(float(frame.pts * frame.time_base) * 1000))
-    return offsets
-
-
-def _capture_start_epoch_ms(config: PreprocessConfig, record: CameraRecord) -> int:
-    """The true epoch of frame 0, from the `cut_sidecar.json` S1 wrote for this camera.
-
-    Later stages don't carry epoch time forward -- they don't need it, only S6 does -- so this
-    reaches back to S1's own output tree rather than something copied down the pipeline.
-    """
-
-    sidecar_path = config.cut_root / record.relative / "cut_sidecar.json"
-    sidecar = json.loads(sidecar_path.read_text())
-    start_ms: int = sidecar["retained"]["rgb"]["epoch_range"][0]
-    return start_ms
-
-
 @task(retries=1)
 def detect_pose_camera(
     record: CameraRecord, config: PreprocessConfig, detector: Detector2D
@@ -193,8 +162,8 @@ def detect_pose_camera(
     frames = Frames(
         count=record.n_frames,
         fps=record.fps,
-        start_epoch_ms=_capture_start_epoch_ms(config, record),
-        t_ms=tuple(_frame_offsets_ms(source / "rgb.mp4")),
+        start_epoch_ms=capture_start_epoch_ms(config.cut_root, record.relative),
+        t_ms=tuple(frame_offsets_ms(source / "rgb.mp4")),
     )
     document = PoseDocument(
         capture_id=record.capture_id,

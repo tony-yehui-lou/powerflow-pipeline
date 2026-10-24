@@ -10,9 +10,10 @@ depth is the geometric source of truth for where the floor is
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
-from typing import Literal
+from typing import Final, Literal
 
 import av
 import cv2
@@ -53,6 +54,8 @@ from powerflow_pipeline.data.preprocess.tasks.ingest import (
     read_frame,
 )
 from powerflow_pipeline.data.preprocess.tasks.orient import OUTPUT_TIME_BASE
+
+RETILT_SIDECAR: Final = "retilt_sidecar.json"
 
 PASSTHROUGH = ("imu.csv",)
 
@@ -242,7 +245,7 @@ def retilt_camera(
         FileOp(op="copy", src=source / "camera_matrix.csv", dst=destination / "camera_matrix.csv"),
         FileOp(op="copy", src=source / "odometry.csv", dst=destination / "odometry.csv"),
         FileOp(op="copy", src=source / "imu.csv", dst=destination / "imu.csv"),
-        FileOp(op="write", src=source, dst=destination / "retilt_sidecar.json"),
+        FileOp(op="write", src=source, dst=destination / RETILT_SIDECAR),
         FileOp(op="publish", src=source, dst=destination),
     ]
     retilt_record = record.model_copy(update={"source": destination})
@@ -406,7 +409,7 @@ def retilt_camera(
         shutil.copy2(source / "odometry.csv", staging / "odometry.csv")
         for name in PASSTHROUGH:
             shutil.copy2(source / name, staging / name)
-        write_json(staging / "retilt_sidecar.json", sidecar)
+        write_json(staging / RETILT_SIDECAR, sidecar)
 
         _validate_exit(staging, record, rgb_size, depth_size, depth_paths, confidence_paths)
 
@@ -417,3 +420,13 @@ def retilt_camera(
         cleanup(staging)
 
     return retilt_record, result
+
+
+def floor_offset_mm(retilt_root: Path, relative: Path) -> float | None:
+    """S3's floor offset in mm, the fallback floor anchor; None if S3 published no sidecar."""
+
+    path = retilt_root / relative / RETILT_SIDECAR
+    if not path.is_file():
+        return None
+    offset: float = json.loads(path.read_text())["floor_offset_m"]
+    return offset * 1000.0

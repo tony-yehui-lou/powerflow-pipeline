@@ -1,5 +1,5 @@
 """The preprocess flow: S0 ingest, S1 cut, S2 orient, S3 retilt, S4 crop, S6 pose, S7 lift,
-S8 kinematics.
+S8 kinematics, S9 bar HVA.
 
 Ordered orchestration only.
 
@@ -31,6 +31,7 @@ from powerflow_pipeline.data.preprocess.models import (
 )
 from powerflow_pipeline.data.preprocess.pose_model import Detector2D
 from powerflow_pipeline.data.preprocess.retilt import assess_plane_consistency
+from powerflow_pipeline.data.preprocess.tasks.bar_hva import solve_bar_hva_camera
 from powerflow_pipeline.data.preprocess.tasks.crop import crop_camera
 from powerflow_pipeline.data.preprocess.tasks.cut import cut_camera, resolve_cut_interval
 from powerflow_pipeline.data.preprocess.tasks.discover import discover_captures
@@ -59,7 +60,8 @@ def preprocess(config: PreprocessConfig, detector: Detector2D | None = None) -> 
     S6 Pose runs after S4 Crop for every surviving camera, but only when `detector` is given,
     so every existing caller that doesn't pass one gets exactly today's S0-S4 behaviour. S7
     Lift then runs only when `config.lift_root` is set, independently of S6: the two stages
-    communicate through S6's published document, not in memory.
+    communicate through S6's published document, not in memory. S9 Bar HVA runs when
+    `config.bar_hva_root` is set; it reads S5's detections, not S6-S8.
     """
 
     if detector is not None and config.pose_root is None:
@@ -69,6 +71,11 @@ def preprocess(config: PreprocessConfig, detector: Detector2D | None = None) -> 
     if config.kinematics_root is not None and config.pose_root is None:
         raise ValueError(
             "config.kinematics_root is set but config.pose_root is unset: no joints to solve"
+        )
+
+    if config.bar_hva_root is not None and config.barbell_root is None:
+        raise ValueError(
+            "config.bar_hva_root is set but config.barbell_root is unset: no bar to differentiate"
         )
 
     context = RunContext.create(
@@ -173,6 +180,13 @@ def preprocess(config: PreprocessConfig, detector: Detector2D | None = None) -> 
                     derived = {**derived, **kinematics_step.derived}
                     warnings = warnings + kinematics_step.warnings
                     file_ops = file_ops + kinematics_step.file_ops
+
+                if config.bar_hva_root is not None:
+                    _, bar_hva_step = solve_bar_hva_camera(crop_record, config)
+                    steps.append("bar_hva")
+                    derived = {**derived, **bar_hva_step.derived}
+                    warnings = warnings + bar_hva_step.warnings
+                    file_ops = file_ops + bar_hva_step.file_ops
             except ScanRejected as rejection:
                 manifest.rejected_scans.append(
                     RejectedScan(

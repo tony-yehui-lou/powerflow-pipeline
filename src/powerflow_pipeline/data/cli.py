@@ -108,6 +108,17 @@ def preprocess(
             ),
         ),
     ] = None,
+    bar_hva_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--bar-hva",
+            help=(
+                "Where S9 publishes bar_hva.json: the bar centre's height, velocity and "
+                "acceleration, by box-constrained Tikhonov regularisation of S5's bar track. "
+                "Needs --barbell; needs neither --pose nor --kinematics."
+            ),
+        ),
+    ] = None,
     skip_detect: Annotated[
         bool,
         typer.Option(
@@ -169,6 +180,7 @@ def preprocess(
     retilt it level with the floor (S3), crop it to a stable common region (S4), and,
     when `--pose` is given, detect joints (S6); `--lift` lifts them with LiDAR depth (S7), and
     `--kinematics` solves them in 3D from the lifter's body measurements instead (S8).
+    `--bar-hva` differentiates the bar's height from S5's detections (S9).
 
     Both raw layouts are handled by one invocation: the directory shape is detected per
     capture from where its operator `metadata.yaml` sits, so there is no layout flag to
@@ -189,6 +201,7 @@ def preprocess(
         lift_root=lift_root,
         kinematics_root=kinematics_root,
         barbell_root=barbell_root,
+        bar_hva_root=bar_hva_root,
         skip_detect=skip_detect,
         pose_detector=pose_detector,
         rtmpose_variant=rtmpose_variant,
